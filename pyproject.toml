@@ -1,0 +1,72 @@
+[project]
+name = "reroll"
+version = "0.1.0"
+description = "Generate v3 repodata from a wheel's METADATA file"
+readme = "README.md"
+authors = [
+    { name = "Anil Kulkarni" }
+]
+requires-python = ">=3.13"
+dependencies = []
+
+[project.scripts]
+reroll = "reroll:main"
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13.0"]
+build-backend = "uv_build"
+
+# Dev-only dependencies (PEP 735). Kept out of [project.dependencies] so the
+# published package never pulls in test/lint/type-check tooling.
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+    "ty>=0.0.1a1",
+]
+
+[tool.pytest.ini_options]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--cov=reroll",
+    "--cov-report=term-missing",
+    "--cov-report=xml",
+]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["reroll"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 100
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
+
+[tool.ruff]
+target-version = "py313"
+src = ["src", "tests"]
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "C4",  # flake8-comprehensions
+    "PT",  # flake8-pytest-style
+]
+
+[tool.ty.environment]
+python = "./.venv"
+root = ["./src", "."]

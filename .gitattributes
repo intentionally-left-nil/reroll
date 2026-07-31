@@ -1,0 +1,3 @@
+# Wheel METADATA files are exact byte-for-byte fixtures (some wheels ship
+# CRLF line endings). Never let git normalize their line endings.
+tests/corpus/cases/**/METADATA -text

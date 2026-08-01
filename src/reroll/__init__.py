@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict
 
-__all__ = ["WheelRecord", "main", "reroll"]
+__all__ = ["WheelRecord", "reroll"]
 
 
 class WheelRecord(BaseModel):
@@ -46,7 +46,3 @@ def reroll(metadata: str, filename: str) -> tuple[WheelRecord, ...]:
             url="tinylib-1.2.3-py3-none-any.whl",
         ),
     )
-
-
-def main() -> None:
-    print("Hello from reroll!")

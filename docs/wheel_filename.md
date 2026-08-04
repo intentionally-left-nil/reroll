@@ -8,12 +8,15 @@ Moving from PyPI to conda via reroll is a new codepath, rather than an exact dup
   * musl linux
   * 32 bit operating systems
   * iOS and Android
+  * linux builds outside of manylinux w/glibc pairings
+  * Mac builds outside of x86_64, arm64, and universal2
+* Reroll will only support x86_64 and arm64/aarch64 architectures (regardless of the platform)
 * Reroll will only support the following python/abi combinations:
   * Any python 3.x version paired with the `none` ABI
   * A Python version paired with that exact CPython ABI e.g.  `cp314-cp314` or `cp314-cp314t`
-  * Any python version >= 3.2 paired with the `abi3` ABI
-  * Any python version >= 3.15 paired with the `abi3t` ABI
-* Reroll will not accept build tags with the `d` debug flag, `m` pymalloc or `u` unicode and will  disregard the wheel
+  * Any CPython version >= 3.2 paired with the `abi3` ABI
+  * Any CPython version >= 3.15 paired with the `abi3t` ABI
+* Reroll will not accept build tags with the `d` debug, `m` pymalloc or `u` unicode ABI suffixes and will  disregard the wheel
 * For a wheel with compressed tags, only the tags matching the above decisions will be used, others will be  discarded
 * The filename parsing code for reroll may return zero, one, or multiple configs for a given filename:
   * If reroll doesn't support the filename due to the above constraints, zero configs will be returned
@@ -22,7 +25,10 @@ Moving from PyPI to conda via reroll is a new codepath, rather than an exact dup
 
 
 # Background
-First, required reading material: https://blog.yossarian.net/2024/06/12/Python-wheel-filenames-have-no-canonical-form
+
+## Reading material
+* https://blog.yossarian.net/2024/06/12/Python-wheel-filenames-have-no-canonical-form
+* https://snarky.ca/the-challenges-in-designing-a-library-for-pep-425/
 
 In the PyPI-based ecosystem, the wheel filename contains meaningful information (and sometimes the only source of information) about a wheel to determine whether it can be installed.
 
@@ -63,14 +69,30 @@ Importantly from the PyPI side, a build number is not something really intended 
 Compatibility tags come in triplicates (python, abi, platform). For a wheel to be installed, it must satisfy all of these requirements. In the future, there may additionally be a `variant` build tag (e.g. for musl), but [PEP 825](https://peps.python.org/pep-0825/#variant-label) is in draft, and is not included in the following analysis.
 
 ### Python tag
-The python tag format can have the following formats:
-* `py3` - any version of python3
-* `py32` - Python 3.2.X (any patch version of python 3.2)
-* `py313` - Python 3.13.x (Any patch version of python 3.13)
+The python tag either begins with `py` (any python interpreter) or `cp` (CPython ) followed by the python version specified.
 
-The rule is the first number corresponds to the major version, and every other number afterwards corresponds to the minor version. There isn't a mechaism to specify a patch version of python
+* `py3` - Any version of python
+* `py34` - Python 3.4 or newer
+* `cp313` - CPython 3.13 (floor or pinned depends on the ABI)
 
-Additionally, instead of `py313`, the python version can be interpreter specific. So, `cp313` means CPython 3.13. It's worth calling out that this isn't the ABI. Instead, this in theory leaves open the possibility that a different interpreter could have its own numbering scheme, and so `zz1` could map to a theoretical zz interpreter that uses a different versioning scheme (but still maps to python 3.13). Since other versions of the interpreter are not currently allowed by reroll, this limits the prefix to either `py` (generic) or `cp` (CPython).
+As you can see, the python tag can either specify the minimum python to use, or it can specify the exact minor version to use. The conceptual model is that interpreter-specific python tags are assumed to be exact-version-only requirements, unless the wheel explicitly loosens that requirement with the `abi3` or `abi3t` ABI tags. Conversely, the vanilla `py` python tags are assumed to just specify the minimum version, and there is no way of specifying a maximum version of pure python via the filename alone.
+
+Specifically:
+
+| Python Tag  | abi tag | version | floor or exact  |
+--------------|---------|---------|-----------------|
+| py3         | none    | 3.0     | floor           |
+| py37        | none    | 3.7     | floor           |
+| py37        | cp37    | invalid | invalid         |
+| py37        | abi3    | invalid | invalid         |
+| cp3         | none    | invalid | invalid         |
+| cp37        | none    | 3.7     | exact           |
+| cp37        | cp37    | 3.7     | exact           |
+| cp37        | abi3    | 3.7     | floor           |
+
+In terms of validity, `py` tags require no python-specific functionality. To have any kind of ABI associated (whether it's abi3 or cp3XX) would violate that principle, hence the combination is invalid.
+
+`cp3` bears specific calling out. The PEP spec supports it (as a peer to py3), and pip used to respect it. However, it was removed in [pip 20](https://pip.pypa.io/en/stable/news/#id997)
 
 ### ABI tag
 The ABI tag is needed for compiled wheels which rely on specific binary layouts in order to operate properly. In practice, there are three main types of wheels:
@@ -110,10 +132,10 @@ For example: `py2.py3` is a valid python tag. It means "Allow both python 2 and 
 
 There are lots of sharp edges with compressed tags. First off, when you combine this system to multiple parts of the platform tag, you end up with the superset of possibilities:
 ```py
-for x in pytag.split('.'):
-    for y in abitag.split('.'):
-        for z in platformtag.split('.'):
-            yield '-'.join((x, y, z))
+for x in pytag.split("."):
+    for y in abitag.split("."):
+        for z in platformtag.split("."):
+            yield "-".join((x, y, z))
 ```
 
 So, if you have a platform tag with `py312.py313-cp312.cp313-any`

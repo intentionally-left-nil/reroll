@@ -31,3 +31,18 @@ Every edge case gets a test *before* the code that handles it exists.
 - Python 3.13+, fully typed. `ty` and `ruff` must pass with zero warnings.
 - Prefer small, pure functions — conversion logic should be trivially
   drivable from a single unit test's `METADATA` fixture.
+
+## Never suppress, always fix
+
+Do not add `# pragma: no cover`, `# type: ignore`, `# ty: ignore`, `# noqa`,
+or any other coverage/lint/type-checker suppression comment to silence a
+failing check. These hide real problems instead of fixing them: an
+uncovered branch usually means the code is unreachable (delete it or
+restructure so the type checker/tests can prove it out) or untested (write
+the missing test), and a type/lint error usually means the code — or the
+API it's calling — needs to change. Treat a suppression as a signal to
+redesign, not a way to get `make ci` green.
+
+If you believe a suppression is genuinely the right call, stop and ask the
+user for explicit permission before adding it, and say why you think no
+fix exists.

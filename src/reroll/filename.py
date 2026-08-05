@@ -13,17 +13,13 @@ PyPy wheel -- routine when indexing a channel with millions of files, so
 rejections are logged at `DEBUG` rather than raised), one config, or several
 (compressed tag expansion, or a fat `universal2` binary that covers two
 architectures).
-
-This module speaks PyPI vocabulary only -- it never mentions conda concepts
-such as `subdir`, MatchSpecs, virtual packages, build strings, or `noarch`.
-Mapping PyPI vocabulary to conda's is a separate concern with its own lookup
-tables, owned by the layer that assembles the actual repodata record.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Annotated, Any
@@ -32,6 +28,7 @@ from packaging.specifiers import SpecifierSet
 from packaging.utils import (
     BuildTag,
     InvalidWheelFilename,
+    NormalizedName,
     canonicalize_name,
     parse_wheel_filename,
 )
@@ -46,6 +43,9 @@ from pydantic import (
     model_validator,
 )
 from pydantic_core import core_schema
+
+from reroll.conda_package_name import CondaPackageName
+from reroll.name_mapping import AmbiguousCondaName, NameMapper, exact_version, map_name
 
 __all__ = [
     "AbiKind",
@@ -380,16 +380,19 @@ class PythonRequirement(BaseModel):
 
 
 class WheelConfig(BaseModel):
-    """One repodata record's worth of PyPI-vocabulary information.
+    """One repodata record's worth of PyPI-vocabulary information, plus the
+    one conda concept this module knows about: `conda_name`.
 
-    `name`/`version`/`build` are repeated on every config derived from one
-    filename even though they are invariant across them, because a consumer
-    iterating configs to emit records needs them on each item.
+    `normalized_pypi_name`/`conda_name`/`version`/`build` are repeated on
+    every config derived from one filename even though they are invariant
+    across them, because a consumer iterating configs to emit records needs
+    them on each item.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    name: str
+    normalized_pypi_name: NormalizedName
+    conda_name: CondaPackageName
     version: PyVersion
     build: BuildTag = ()
     interpreter: str
@@ -407,9 +410,9 @@ class WheelConfig(BaseModel):
     for it to ever actually be reached.
     """
 
-    @field_validator("name")
+    @field_validator("normalized_pypi_name")
     @classmethod
-    def _validate_name(cls, value: str) -> str:
+    def _validate_normalized_pypi_name(cls, value: str) -> NormalizedName:
         """PEP 503 normalization: `canonicalize_name` -- e.g. `"Re_Roll.X"`
         -> `"re-roll-x"`.
         """
@@ -509,17 +512,34 @@ def _sort_key(config: WheelConfig) -> tuple[str, str, str, str]:
     )
 
 
-def parse_filename(filename: str) -> tuple[WheelConfig, ...]:
+def parse_filename(filename: str, mappers: Sequence[NameMapper]) -> tuple[WheelConfig, ...]:
     """Parse a wheel filename into zero or more `WheelConfig`s.
 
-    Never raises: an unparseable filename or a filename with no supported
-    `(tag, arch)` combination both return `()`, and the reason is logged at
-    `DEBUG`.
+    `mappers` is required, with no default: an empty chain (`()`) is a
+    legitimate policy ("always use the normalized PyPI name"), but it must
+    be requested explicitly rather than silently assumed by a caller who
+    forgot the argument.
+
+    Never raises for filename input: an unparseable filename or a filename
+    with no supported `(tag, arch)` combination both return `()`, and the
+    reason is logged at `DEBUG`. A mapper that raises `AmbiguousCondaName`
+    also yields `()`, but is logged at `WARNING` since (unlike the other
+    rejections) it has a concrete, actionable fix -- add a disambiguating
+    mapper. Any other exception a mapper raises propagates: the "never
+    raises" contract covers filename input only, not mapper bugs.
     """
     try:
         name, version, build, tags = parse_wheel_filename(filename)
     except InvalidWheelFilename as exc:
         logger.debug("unparseable wheel filename %r: %s", filename, exc)
+        return ()
+
+    # The name and version are tag-invariant, so this is resolved once,
+    # before the tag loop below -- not once per `(tag, arch)` combination.
+    try:
+        conda_name = map_name(name, exact_version(version), mappers)
+    except AmbiguousCondaName as exc:
+        logger.warning("ambiguous conda name for wheel filename %r: %s", filename, exc)
         return ()
 
     configs: list[WheelConfig] = []
@@ -534,7 +554,8 @@ def parse_filename(filename: str) -> tuple[WheelConfig, ...]:
             try:
                 configs.append(
                     WheelConfig(
-                        name=name,
+                        normalized_pypi_name=name,
+                        conda_name=conda_name,
                         version=version,
                         build=build,
                         interpreter=tag.interpreter,

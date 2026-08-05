@@ -11,7 +11,23 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict
 
-__all__ = ["WheelRecord", "reroll"]
+from reroll.name_mapping import (
+    AmbiguousCondaName,
+    NameMapper,
+    exact_version,
+    map_name,
+    static_mapper,
+)
+
+__all__ = [
+    "AmbiguousCondaName",
+    "NameMapper",
+    "WheelRecord",
+    "exact_version",
+    "map_name",
+    "reroll",
+    "static_mapper",
+]
 
 
 class WheelRecord(BaseModel):

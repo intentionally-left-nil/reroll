@@ -32,6 +32,21 @@ Every edge case gets a test *before* the code that handles it exists.
 - Prefer small, pure functions — conversion logic should be trivially
   drivable from a single unit test's `METADATA` fixture.
 
+## Never modify `docs/*.md`
+
+Files under `docs/` are human-authored decision records. Never create, edit,
+or delete them.
+
+- If the work *contradicts* a doc, stop and surface the conflict to the user.
+  Wait for the user to resolve the doc before continuing.
+- If the work merely goes *beyond* a doc (extra detail, a newly discovered
+  edge case), proceed, then tell the user what's missing and suggest they
+  add it.
+
+`specs/` is the agent-writable counterpart: approved implementation specs,
+describing the final intended state of the code. Write there instead, and
+link to the relevant `docs/` file for background rather than restating it.
+
 ## Never suppress, always fix
 
 Do not add `# pragma: no cover`, `# type: ignore`, `# ty: ignore`, `# noqa`,

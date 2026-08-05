@@ -18,6 +18,7 @@ from reroll.name_mapping import (
     map_name,
     static_mapper,
 )
+from reroll.parselmouth_direct import parselmouth_direct_mapper
 
 __all__ = [
     "AmbiguousCondaName",
@@ -25,6 +26,7 @@ __all__ = [
     "WheelRecord",
     "exact_version",
     "map_name",
+    "parselmouth_direct_mapper",
     "reroll",
     "static_mapper",
 ]

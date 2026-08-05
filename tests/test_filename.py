@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import logging
 
 import pytest
@@ -93,6 +94,115 @@ class TestInterpreterValidator:
 
 
 # --------------------------------------------------------------------------
+# `cp*` interpreter tags below Python 3.4 (docs/wheel_filename.md: "Python
+# Tag | abi tag | Allowed" table, background section on the python tag).
+#
+# Python 3.0-3.3 was never shipped on defaults or conda-forge. A `cp` tag
+# paired with `none` or a matching versioned ABI *pins* that minor exactly,
+# so it's unsupported below 3.4 -- no python 3.0-3.3 build exists to pin to.
+# `abi3` is different: it *loosens* the tag to a floor, and PEP 384
+# introduced the stable ABI at 3.2, so `cp32-abi3`/`cp33-abi3` are legal
+# floors that resolve up to whatever 3.4+ is actually available. Below
+# abi3's own 3.2 floor (`cp30-abi3`, `cp31-abi3`) is still dropped, as a
+# "strong suggestion the filename is bogus" per the doc. A generic `py*`
+# tag is a pure floor with no tie to a real interpreter at all, so it's
+# unaffected by any of this -- `py32` is fine even though python 3.2
+# itself doesn't exist on those channels.
+# --------------------------------------------------------------------------
+
+
+class TestPythonVersionFloorTable:
+    """Every row of the doc's table, tested verbatim."""
+
+    @pytest.mark.parametrize(
+        ("interpreter", "abi"),
+        [
+            ("py3", "none"),
+            ("py32", "none"),
+            ("cp32", "abi3"),
+            ("cp33", "abi3"),
+        ],
+        ids=["py3-none", "py32-none", "cp32-abi3", "cp33-abi3"],
+    )
+    def test_allowed(self, interpreter: str, abi: str) -> None:
+        _config(interpreter=interpreter, abi=abi)
+
+    @pytest.mark.parametrize(
+        ("interpreter", "abi"),
+        [
+            ("py32", "cp37"),
+            ("py32", "abi3"),
+            ("cp3", "none"),
+            ("cp3", "abi3"),
+            ("cp32", "none"),
+            ("cp32", "cp32"),
+            ("cp30", "abi3"),
+            ("cp31", "abi3"),
+        ],
+        ids=[
+            "py32-cp37",
+            "py32-abi3",
+            "cp3-none",
+            "cp3-abi3",
+            "cp32-none",
+            "cp32-cp32",
+            "cp30-abi3",
+            "cp31-abi3",
+        ],
+    )
+    def test_disallowed(self, interpreter: str, abi: str) -> None:
+        with pytest.raises(ValidationError):
+            _config(interpreter=interpreter, abi=abi)
+
+
+class TestCpythonBelow34Rejected:
+    """Beyond the table's `cp32`/`cp3` rows: the `< 3.4` restriction applies
+    to *any* minor below 4 when the tag pins an exact version (`none` or a
+    matching versioned ABI). `abi3`'s own (lower, 3.2) floor is covered
+    separately by `TestPythonVersionFloorTable` and `TestAbi3FloorIsPoint2`.
+    """
+
+    @pytest.mark.parametrize("minor", [0, 1, 2, 3])
+    def test_rejects_low_minor_with_none_abi(self, minor: int) -> None:
+        with pytest.raises(ValidationError):
+            _config(interpreter=f"cp3{minor}", abi="none")
+
+    @pytest.mark.parametrize("minor", [0, 1, 2, 3])
+    def test_rejects_low_minor_with_matching_versioned_abi(self, minor: int) -> None:
+        with pytest.raises(ValidationError):
+            _config(interpreter=f"cp3{minor}", abi=f"cp3{minor}")
+
+    def test_3_4_itself_is_the_floor_for_none_and_versioned_pins(self) -> None:
+        """3.4 is explicitly allowed ('less than 3.4' is the cutoff) for the
+        two *exact-pin* shapes -- `abi3`'s own (lower) floor is tested in
+        `TestAbi3FloorIsPoint2`.
+        """
+        _config(interpreter="cp34", abi="none")
+        _config(interpreter="cp34", abi="cp34")
+
+
+class TestAbi3FloorIsPoint2:
+    """`abi3` (PEP 384) is a floor, not a pin, and was introduced at Python
+    3.2 -- one minor *below* the 3.4 cutoff that applies to `none`/matching
+    versioned ABIs. `abi3t` is unaffected: its own floor (3.15) is well
+    above either number.
+    """
+
+    @pytest.mark.parametrize("minor", [0, 1])
+    def test_rejects_below_its_own_floor(self, minor: int) -> None:
+        with pytest.raises(ValidationError):
+            _config(interpreter=f"cp3{minor}", abi="abi3")
+
+    @pytest.mark.parametrize("minor", [2, 3, 4, 13])
+    def test_accepts_at_or_above_its_own_floor(self, minor: int) -> None:
+        _config(interpreter=f"cp3{minor}", abi="abi3")
+
+    def test_abi3t_floor_is_unaffected_and_still_15(self) -> None:
+        with pytest.raises(ValidationError):
+            _config(interpreter="cp33", abi="abi3t")
+
+
+# --------------------------------------------------------------------------
 # `abi` validator
 # --------------------------------------------------------------------------
 
@@ -109,8 +219,11 @@ class TestAbiValidator:
     def test_accepts_versioned_cpython_abi(self, abi: str) -> None:
         assert _config(interpreter="cp313", abi=abi).abi == abi
 
-    @pytest.mark.parametrize("abi", ["cp313d", "cp313dm", "cp27mu"])
-    def test_rejects_debug_pymalloc_unicode_suffixes(self, abi: str) -> None:
+    @pytest.mark.parametrize("abi", ["cp313d", "cp313dm", "cp313du", "cp313dmu", "cp313dt"])
+    def test_rejects_debug_suffix(self, abi: str) -> None:
+        """Only `d` (debug) blocks the wheel -- see `TestAbiBuildSuffixes`
+        below for the full `d`/`m`/`u`/`t` combination matrix.
+        """
         with pytest.raises(ValidationError):
             _config(interpreter="cp313", abi=abi)
 
@@ -127,6 +240,83 @@ class TestAbiValidator:
     def test_rejects_versioned_abi_with_non_python3_major(self) -> None:
         with pytest.raises(ValidationError):
             _config(interpreter="cp313", abi="cp208")
+
+
+# --------------------------------------------------------------------------
+# ABI build suffixes: `d`/`m`/`u`/`t` combinations
+#
+# docs/wheel_filename.md: every CPython shipped on defaults/conda-forge from
+# 3.4 onward is a pymalloc, wide-unicode build, so the `m` and `u` suffixes
+# are silently stripped rather than treated as a mismatch. `d` (debug) is a
+# real ABI difference and still blocks the wheel. `t` (free-threaded) is
+# unrelated to any of that and is preserved verbatim. The four flags can
+# appear in any subset and (per real-world wheels) in any order, so this
+# exhaustively covers all 16 subsets of {d, m, u, t} rather than just a few
+# hand-picked examples.
+# --------------------------------------------------------------------------
+
+_ABI_BUILD_FLAGS = ("d", "m", "u", "t")
+
+
+def _abi_flag_combinations() -> list[frozenset[str]]:
+    return [
+        frozenset(combo)
+        for r in range(len(_ABI_BUILD_FLAGS) + 1)
+        for combo in itertools.combinations(_ABI_BUILD_FLAGS, r)
+    ]
+
+
+def _combo_id(flags: frozenset[str]) -> str:
+    return "".join(sorted(flags)) or "none"
+
+
+# Pre-partitioned by whether `d` is present, rather than generating the full
+# 16-combination list once and having each test `pytest.skip()` its other
+# half: a skip masks the difference between "not applicable" and "silently
+# never ran", and would hide a future test that's *wrongly* skipped. Each
+# `@pytest.mark.parametrize` below only ever sees cases it actually asserts
+# on.
+_COMBOS_WITH_D = [flags for flags in _abi_flag_combinations() if "d" in flags]
+_COMBOS_WITHOUT_D = [flags for flags in _abi_flag_combinations() if "d" not in flags]
+
+
+class TestAbiBuildSuffixes:
+    @pytest.mark.parametrize("flags", _COMBOS_WITH_D, ids=_combo_id)
+    def test_d_blocks_the_wheel_regardless_of_other_flags(self, flags: frozenset[str]) -> None:
+        suffix = "".join(flag for flag in _ABI_BUILD_FLAGS if flag in flags)
+
+        with pytest.raises(ValidationError):
+            _config(interpreter="cp313", abi=f"cp313{suffix}")
+
+    @pytest.mark.parametrize("flags", _COMBOS_WITHOUT_D, ids=_combo_id)
+    def test_m_and_u_are_stripped_when_d_is_absent(self, flags: frozenset[str]) -> None:
+        suffix = "".join(flag for flag in _ABI_BUILD_FLAGS if flag in flags)
+
+        config = _config(interpreter="cp313", abi=f"cp313{suffix}")
+
+        expected_abi = "cp313t" if "t" in flags else "cp313"
+        assert config.abi == expected_abi
+        assert config.free_threaded is ("t" in flags)
+
+    @pytest.mark.parametrize(
+        ("abi", "expected"),
+        [
+            ("cp313m", "cp313"),
+            ("cp313u", "cp313"),
+            ("cp313mu", "cp313"),
+            ("cp313um", "cp313"),
+            ("cp313tm", "cp313t"),
+            ("cp313mt", "cp313t"),
+            ("cp313tmu", "cp313t"),
+            ("cp313mut", "cp313t"),
+        ],
+    )
+    def test_stripping_is_order_independent(self, abi: str, expected: str) -> None:
+        """Real-world wheels don't agree on flag order (`cp36dm`, `cp37mu`,
+        `cp313td` were all seen in the wild) -- the result must not depend
+        on which order `m`/`u`/`t` appear in.
+        """
+        assert _config(interpreter="cp313", abi=abi).abi == expected
 
 
 # --------------------------------------------------------------------------
@@ -232,7 +422,7 @@ class TestInterpreterAbiPairing:
     def test_cp_with_matching_free_threaded_abi_is_legal(self) -> None:
         _config(interpreter="cp314", abi="cp314t")
 
-    def test_cp_with_abi3_is_legal_when_minor_at_least_2(self) -> None:
+    def test_cp_with_abi3_is_legal(self) -> None:
         _config(interpreter="cp313", abi="abi3")
 
     def test_cp_with_abi3t_is_legal_when_minor_at_least_15(self) -> None:
@@ -248,6 +438,7 @@ class TestInterpreterAbiPairing:
             _config(interpreter="cp313", abi="cp312")
 
     def test_rejects_abi3_below_3_2(self) -> None:
+        """See `TestAbi3FloorIsPoint2` for the full boundary matrix."""
         with pytest.raises(ValidationError):
             _config(interpreter="cp31", abi="abi3")
 
@@ -492,6 +683,19 @@ class TestParseFilename:
         (config,) = parse_filename("tinylib-1.2.3-1mybuild-py3-none-any.whl")
 
         assert config.build == (1, "mybuild")
+
+    def test_pymalloc_and_unicode_abi_suffixes_are_stripped_end_to_end(self) -> None:
+        """`m`/`u` are supported (not filtered out) *and* stripped from the
+        `abi` tag reroll hands back to the caller -- both halves of
+        docs/wheel_filename.md's decision, exercised through the public
+        `parse_filename` entry point rather than `WheelConfig` directly.
+        """
+        (config,) = parse_filename("tinylib-1.2.3-cp313-cp313mu-manylinux_2_17_x86_64.whl")
+
+        assert config.abi == "cp313"
+
+    def test_debug_abi_suffix_still_drops_the_wheel_end_to_end(self) -> None:
+        assert parse_filename("tinylib-1.2.3-cp313-cp313dmu-manylinux_2_17_x86_64.whl") == ()
 
     def test_sort_is_deterministic_across_calls(self) -> None:
         filename = "tinylib-1.2.3-py38.py39.py310-none-any.whl"

@@ -123,6 +123,10 @@ def _parse_interpreter(tag: str) -> tuple[str, int, int]:
     Grammar: `(py|cp)` followed by digits. The first digit is the major
     version; all remaining digits are the minor -- there is no way to encode
     a patch version in a wheel tag.
+
+    Whether a given minor is actually *supported* depends on which ABI it's
+    paired with (a `cp32-none` pin is unsupported but `cp32-abi3` isn't), so
+    that check lives in `_check_interpreter_abi`, not here.
     """
     match = _INTERPRETER_RE.match(tag)
     if match is None:
@@ -149,15 +153,19 @@ class _AbiInfo:
     free_threaded: bool
 
 
-_ABI_CP_RE = re.compile(r"^cp(\d+)(t)?$")
+_ABI_CP_RE = re.compile(r"^cp(\d+)([dmut]*)$")
 
 
 def _parse_abi(tag: str) -> _AbiInfo:
     """Return the parsed ABI shape. Raises `ValueError` if invalid.
 
-    Accepts `none`; `abi3`/`abi3t`; `cp` + digits with an optional trailing
-    `t`. The `d`/`m`/`u` suffixes and non-CPython ABIs are rejected by simply
-    not matching any of these forms.
+    Accepts `none`; `abi3`/`abi3t`; `cp` + digits with an optional build
+    suffix combining `d`/`m`/`u`/`t` in any order. Per
+    docs/wheel_filename.md, only `d` (debug) is unsupported -- every CPython
+    shipped on defaults/conda-forge from 3.4 onward is already a pymalloc,
+    wide-unicode build, so `m`/`u` are harmless and `_normalize_abi` strips
+    them rather than rejecting the wheel. Non-CPython ABIs are rejected by
+    simply not matching any of these forms.
     """
     if tag == "none":
         return _AbiInfo(kind=AbiKind.NONE, minor=None, free_threaded=False)
@@ -167,29 +175,53 @@ def _parse_abi(tag: str) -> _AbiInfo:
     match = _ABI_CP_RE.match(tag)
     if match is None:
         raise ValueError(f"invalid abi tag: {tag!r}")
-    digits, free_threaded_suffix = match.groups()
+    digits, suffix = match.groups()
     major = int(digits[0])
     if major != 3:
         raise ValueError(f"unsupported abi major version: {tag!r}")
+    if "d" in suffix:
+        raise ValueError(f"debug abi suffix is not supported: {tag!r}")
     minor = int(digits[1:]) if len(digits) > 1 else 0
-    return _AbiInfo(
-        kind=AbiKind.VERSIONED, minor=minor, free_threaded=free_threaded_suffix is not None
-    )
+    return _AbiInfo(kind=AbiKind.VERSIONED, minor=minor, free_threaded="t" in suffix)
+
+
+def _normalize_abi(tag: str) -> str:
+    """Canonicalize a `cp`-style ABI tag by dropping the `m`/`u` build
+    suffixes reroll silently ignores (docs/wheel_filename.md). `none`,
+    `abi3`, and `abi3t` have no such suffixes and pass through unchanged.
+    Must only be called after `_parse_abi` has confirmed `tag` is valid
+    (i.e. does not carry `d`), so the only suffix left to preserve is `t`.
+    """
+    match = _ABI_CP_RE.match(tag)
+    if match is None:
+        return tag
+    digits, suffix = match.groups()
+    return f"cp{digits}t" if "t" in suffix else f"cp{digits}"
 
 
 def _check_interpreter_abi(interpreter: str, abi: str) -> None:
     """Cross-field validation for the legal (interpreter, ABI) pairings.
     Raises `ValueError` for everything else.
 
-    Only six combinations are legal: any interpreter with the `none` ABI;
-    a `cpXY` interpreter with a `cpXY`/`cpXYt` ABI whose minor matches; or a
-    `cpXY` interpreter with `abi3` (minor >= 2) or `abi3t` (minor >= 15).
+    Only six pairing *shapes* are legal: any interpreter with the `none`
+    ABI; a `cpXY` interpreter with a `cpXY`/`cpXYt` ABI whose minor matches;
+    or a `cpXY` interpreter with `abi3` (minor >= 2) or `abi3t` (minor >=
+    15). Beyond that shape check, a `cp` tag paired with `none` or a
+    matching versioned ABI *pins* that minor exactly, and Python 3.0-3.3 was
+    never shipped on defaults or conda-forge, so those two shapes also
+    require minor >= 4. `abi3`/`abi3t` loosen the tag to a floor instead, so
+    they get their own (already-checked) floors rather than the 3.4 one --
+    `cp32-abi3` is fine even though python 3.2 itself doesn't exist on those
+    channels, because the floor resolves up to whatever 3.4+ IS available.
     """
     prefix, _, interp_minor = _parse_interpreter(interpreter)
     abi_info = _parse_abi(abi)
 
     if abi_info.kind is AbiKind.NONE:
-        # Any interpreter tag may pair with the `none` ABI.
+        # Any interpreter tag may pair with the `none` ABI -- but a `cp` tag
+        # pins that minor exactly, so it still needs to be >= 3.4 to resolve.
+        if prefix == "cp" and interp_minor < 4:
+            raise ValueError(f"CPython < 3.4 is unsupported: {interpreter!r}")
         return
 
     if prefix == "py":
@@ -201,9 +233,12 @@ def _check_interpreter_abi(interpreter: str, abi: str) -> None:
         )
 
     if abi_info.kind is AbiKind.VERSIONED:
-        # A versioned ABI's minor must match the interpreter's.
+        # A versioned ABI's minor must match the interpreter's, and (like
+        # `none`) pins that minor exactly.
         if abi_info.minor != interp_minor:
             raise ValueError(f"versioned abi {abi!r} minor must match interpreter {interpreter!r}")
+        if interp_minor < 4:
+            raise ValueError(f"CPython < 3.4 is unsupported: {interpreter!r}")
         return
 
     # STABLE (abi3 / abi3t). The floor comes from the interpreter tag's own
@@ -389,8 +424,13 @@ class WheelConfig(BaseModel):
     @field_validator("abi")
     @classmethod
     def _validate_abi(cls, value: str) -> str:
+        """Validate, then normalize: `_parse_abi` raises on a `d` suffix or
+        any other unsupported shape, and `_normalize_abi` strips the
+        harmless `m`/`u` suffixes so the stored (and eventually emitted)
+        `abi` tag never carries them.
+        """
         _parse_abi(value)
-        return value
+        return _normalize_abi(value)
 
     @model_validator(mode="after")
     def _validate_cross_fields(self) -> WheelConfig:

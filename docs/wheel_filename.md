@@ -4,6 +4,7 @@ Moving from PyPI to conda via reroll is a new codepath, rather than an exact dup
 * Filenames must be parseable by packaging.parse_wheel_filename. Any legacy, out of compliance wheel name is ignored
 * Reroll will only initially support CPython 3.x, not PyPy, GraalPy, or other ABI's. Further ABI support can be added later based on real use cases
 * Reroll will not support Python 2.x wheels (or CPython 2.x)
+* Reroll will not support wheels which require a specific minor version of python less than 3.4
 * Reroll will not support the following platform tags (support can be added later based on real use cases)
   * musl linux
   * 32 bit operating systems
@@ -16,7 +17,8 @@ Moving from PyPI to conda via reroll is a new codepath, rather than an exact dup
   * A Python version paired with that exact CPython ABI e.g.  `cp314-cp314` or `cp314-cp314t`
   * Any CPython version >= 3.2 paired with the `abi3` ABI
   * Any CPython version >= 3.15 paired with the `abi3t` ABI
-* Reroll will not accept build tags with the `d` debug, `m` pymalloc or `u` unicode ABI suffixes and will  disregard the wheel
+* Reroll will not accept build tags with the `d` debug ABI suffix and will  disregard the wheel
+* Reroll will silently drop the `m` or `u` ABI suffixes since all builds of python on main and conda-forge were built with pymalloc
 * For a wheel with compressed tags, only the tags matching the above decisions will be used, others will be  discarded
 * The filename parsing code for reroll may return zero, one, or multiple configs for a given filename:
   * If reroll doesn't support the filename due to the above constraints, zero configs will be returned
@@ -94,6 +96,23 @@ In terms of validity, `py` tags require no python-specific functionality. To hav
 
 `cp3` bears specific calling out. The PEP spec supports it (as a peer to py3), and pip used to respect it. However, it was removed in [pip 20](https://pip.pypa.io/en/stable/news/#id997)
 
+Python 3.0 through 3.3 also needs a special callout. These early builds of python 3 are not available on conda, either on `main` or `conda-forge` channels. Thus, there is no point in creating repodata for packages which will fail to solve. However, if the python package will accept e.g. >= 3.2, then that package would be accepted as-is. We can thus use the same table to determine if the wheel should be allowed or not. The abi3 tag only applies to python 3.2 or greater, so we can also drop any abi3 tagged wheels where the version is less than 3.2 (as this is a strong suggestion the filename is bogus)
+
+| Python Tag  | abi tag | Allowed |
+--------------|---------|---------|
+| py3         | none    | yes     |
+| py32        | none    | yes     |
+| py32        | cp37    | no      |
+| py32        | abi3    | no      |
+| cp3         | none    | no      |
+| cp3         | abi3    | no      |
+| cp32        | none    | no      |
+| cp32        | cp32    | no      |
+| cp30        | abi3    | no      |
+| cp31        | abi3    | no      |
+| cp32        | abi3    | yes     |
+| cp33        | abi3    | yes     |
+
 ### ABI tag
 The ABI tag is needed for compiled wheels which rely on specific binary layouts in order to operate properly. In practice, there are three main types of wheels:
 * Wheels which do not require any binary-specific compatibility (most likely pure-python wheels). These should use the `none` ABI
@@ -109,7 +128,9 @@ The `t` suffix is actually just one of many suffixes that the ABI can reference.
 * `u` - Python compiled with unicode support
 * `m` - Python with pymalloc support
 
-Unlike the `t` flag, the other flags are currently not supported by reroll. Instead, this will cause the wheel to be dropped.
+Of these additional flags, only the `d` flag is unsupported. I checked every version of python available on main and conda-forge from 3.4 -> 3.7, and all of those python builds were built using pymalloc. Thus, it is safe to just strip the `m` suffix and treat `cp34m` as `cp34`. The `u` flag indicated unicode support, and that only existed from python 3.0 to 3.2. The earliest python3 on main and conda-forge is 3.4, so all implementations are unicode compatible. The debug flag is different - it has ABI changes and is a non-standard build. For simplicity, all wheels which are explicitly compiled against the debug version of python will not be supported
+
+
 
 Note that abi tags are fraught with ecosystem mislabling. According to [trailofbits](https://blog.trailofbits.com/2022/11/15/python-wheels-abi-abi3audit/), 15% of wheels mislabeled their ABI specifications (such as claiming to be universal ABI3 but really requiring version specific behavior). Compressed tags (described later) also contribute to this ecosystem fragility.
 

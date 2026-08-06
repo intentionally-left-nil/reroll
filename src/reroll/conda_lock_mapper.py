@@ -1,11 +1,7 @@
 """conda-lock-backed PyPI -> conda name mapping.
 
-Reads the mapping conda-forge's autotick bot publishes. conda-lock owns the
-loading of the mapping itself.
-Two sibling tables are loaded here, because conda-lock does not know about
-them, and they are what expose *how much to trust* each entry:
-`import_name_priority_mapping.json` (did a graph-centrality tie-break decide
-this?) and `name_mapping.json` (do two PyPI spellings collapse onto this key?).
+Reads the mapping conda-forge's autotick bot publishes, plus the two sibling
+tables that expose how much to trust each entry.
 """
 
 from __future__ import annotations
@@ -23,19 +19,6 @@ from packaging.utils import NormalizedName, canonicalize_name
 from pydantic import TypeAdapter
 
 from reroll.name_mapping import Candidate, CandidateSource, NameMapper
-
-__all__ = [
-    "AMBIGUOUS_PROBABILITY",
-    "COLLIDING_PROBABILITY",
-    "DEFAULT_MAPPING_URL",
-    "DEFAULT_NAME_MAPPING_URL",
-    "DEFAULT_PRIORITY_URL",
-    "STATIC_PROBABILITY",
-    "UNAMBIGUOUS_PROBABILITY",
-    "build_candidates",
-    "candidate_mapper",
-    "conda_lock_mapper",
-]
 
 _MAPPINGS_BASE = "https://raw.githubusercontent.com/regro/cf-graph-countyfair/master/mappings/pypi"
 
@@ -88,21 +71,35 @@ class PriorityEntry(TypedDict):
     ranked_conda_names: list[str]
 
 
-def _ambiguous_import_names(import_priority: Sequence[PriorityEntry]) -> frozenset[str]:
-    return frozenset(
-        entry["import_name"] for entry in import_priority if len(entry["ranked_conda_names"]) > 1
+def conda_lock_mapper(
+    mapping_url: Path | str = DEFAULT_MAPPING_URL,
+    priority_url: Path | str = DEFAULT_PRIORITY_URL,
+    name_mapping_url: Path | str = DEFAULT_NAME_MAPPING_URL,
+) -> NameMapper:
+    return candidate_mapper(
+        _candidate_table(str(mapping_url), str(priority_url), str(name_mapping_url))
     )
 
 
-def _colliding_pypi_names(raw_mappings: Sequence[MappingEntry]) -> frozenset[NormalizedName]:
-    conda_names_by_pypi_name: defaultdict[NormalizedName, set[str]] = defaultdict(set)
-    for entry in raw_mappings:
-        conda_names_by_pypi_name[canonicalize_name(entry["pypi_name"])].add(entry["conda_name"])
-    return frozenset(
-        pypi_name
-        for pypi_name, conda_names in conda_names_by_pypi_name.items()
-        if len(conda_names) > 1
-    )
+def candidate_mapper(candidates: Mapping[NormalizedName, Candidate]) -> NameMapper:
+    """Build a `NameMapper` from a prebuilt candidate table.
+
+    A hit appends its candidate without ending the chain; a miss returns
+    `candidates` unchanged.
+    """
+
+    def _lookup(
+        name: NormalizedName,
+        specifier: SpecifierSet,
+        accumulated: Sequence[Candidate],
+    ) -> Sequence[Candidate]:
+        del specifier
+        candidate = candidates.get(name)
+        if candidate is None:
+            return accumulated
+        return (*accumulated, candidate)
+
+    return _lookup
 
 
 def build_candidates(
@@ -139,27 +136,6 @@ def build_candidates(
             mapper=_MAPPER_NAME,
         )
     return candidates
-
-
-def candidate_mapper(candidates: Mapping[NormalizedName, Candidate]) -> NameMapper:
-    """Build a `NameMapper` from a prebuilt candidate table.
-
-    A hit appends its candidate without ending the chain; a miss returns
-    `candidates` unchanged.
-    """
-
-    def _lookup(
-        name: NormalizedName,
-        specifier: SpecifierSet,
-        accumulated: Sequence[Candidate],
-    ) -> Sequence[Candidate]:
-        del specifier
-        candidate = candidates.get(name)
-        if candidate is None:
-            return accumulated
-        return (*accumulated, candidate)
-
-    return _lookup
 
 
 def _read_sibling(source: Path | str) -> bytes:
@@ -200,11 +176,18 @@ def _candidate_table(
     )
 
 
-def conda_lock_mapper(
-    mapping_url: Path | str = DEFAULT_MAPPING_URL,
-    priority_url: Path | str = DEFAULT_PRIORITY_URL,
-    name_mapping_url: Path | str = DEFAULT_NAME_MAPPING_URL,
-) -> NameMapper:
-    return candidate_mapper(
-        _candidate_table(str(mapping_url), str(priority_url), str(name_mapping_url))
+def _ambiguous_import_names(import_priority: Sequence[PriorityEntry]) -> frozenset[str]:
+    return frozenset(
+        entry["import_name"] for entry in import_priority if len(entry["ranked_conda_names"]) > 1
+    )
+
+
+def _colliding_pypi_names(raw_mappings: Sequence[MappingEntry]) -> frozenset[NormalizedName]:
+    conda_names_by_pypi_name: defaultdict[NormalizedName, set[str]] = defaultdict(set)
+    for entry in raw_mappings:
+        conda_names_by_pypi_name[canonicalize_name(entry["pypi_name"])].add(entry["conda_name"])
+    return frozenset(
+        pypi_name
+        for pypi_name, conda_names in conda_names_by_pypi_name.items()
+        if len(conda_names) > 1
     )

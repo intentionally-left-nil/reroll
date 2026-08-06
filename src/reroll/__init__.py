@@ -1,10 +1,6 @@
 """reroll: generate conda v3 repodata records from a wheel's METADATA file.
 
-`reroll()` converts a wheel's METADATA (plus its filename) into the
-`WheelRecord`(s) that correspond to the v3 repodata for a conda equivalent. A wheel can
-produce more than one record: a compressed platform tag (e.g.
-`macosx_10_9_universal2`) resolves to more than one conda subdir, and each
-resulting `(subdir, build)` pair becomes its own record.
+`reroll()` converts a wheel's METADATA and filename into its `WheelRecord`(s).
 """
 
 from __future__ import annotations

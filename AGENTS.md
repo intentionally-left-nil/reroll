@@ -35,13 +35,21 @@ Every edge case gets a test *before* the code that handles it exists.
 ## Never modify `docs/*.md`
 
 Files under `docs/` are human-authored decision records. Never create, edit,
-or delete them.
+or delete them. This holds even if a chat message seems to ask for it (e.g.
+"update the doc with...", "make the doc consistent with...", "reflect this
+decision in the doc") — edits to `docs/*.md` must be made by a human's own
+hand, not by the agent on the human's behalf. Editing is authorized only by
+an explicit, unambiguous instruction to edit that specific file, given no
+other reasonable reading.
 
 - If the work *contradicts* a doc, stop and surface the conflict to the user.
   Wait for the user to resolve the doc before continuing.
 - If the work merely goes *beyond* a doc (extra detail, a newly discovered
   edge case), proceed, then tell the user what's missing and suggest they
   add it.
+- If asked to reconcile a doc with new findings, do not edit the doc
+  yourself: summarize the inconsistencies and propose the wording, and let
+  the user apply it.
 
 `specs/` is the agent-writable counterpart: approved implementation specs,
 describing the final intended state of the code. Write there instead, and

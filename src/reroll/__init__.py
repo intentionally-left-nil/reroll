@@ -12,17 +12,25 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict
 
 from reroll.name_mapping import (
-    AmbiguousCondaName,
+    Candidate,
+    CandidateSource,
     NameMapper,
+    NameMappers,
+    UnresolvedCandidates,
+    aggregator_mapper,
     exact_version,
     map_name,
     static_mapper,
 )
 
 __all__ = [
-    "AmbiguousCondaName",
+    "Candidate",
+    "CandidateSource",
     "NameMapper",
+    "NameMappers",
+    "UnresolvedCandidates",
     "WheelRecord",
+    "aggregator_mapper",
     "exact_version",
     "map_name",
     "reroll",

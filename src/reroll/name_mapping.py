@@ -9,60 +9,84 @@ any kind is out of scope here (see `specs/name_mapping.md`).
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from enum import StrEnum
 
 from packaging.specifiers import SpecifierSet
 from packaging.utils import NormalizedName, canonicalize_name
 from packaging.version import Version
-from pydantic import RootModel, field_validator
+from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
 
 from reroll.conda_package_name import CondaPackageName
 
 __all__ = [
-    "AmbiguousCondaName",
+    "Candidate",
+    "CandidateSource",
     "NameMapper",
+    "NameMappers",
+    "UnresolvedCandidates",
+    "aggregator_mapper",
     "exact_version",
     "map_name",
     "static_mapper",
 ]
 
-NameMapper = Callable[[NormalizedName, SpecifierSet], str | None]
-"""A callable taking a canonicalized PyPI name and a version specifier,
-returning the conda name it maps to, or `None` to mean "I have no opinion,
-ask the next mapper". A plain `Callable` alias -- not a `Protocol` -- so a
-function, `lambda`, closure, `functools.partial`, bound method, or a
-stateful class instance with `__call__` all satisfy it with no registration
-and no base class.
 
-A mapper owns its own disambiguation policy: it may return any single `str`
-it likes, or raise `AmbiguousCondaName` if it recognizes the package but
-cannot produce one answer.
+class CandidateSource(StrEnum):
+    """The data source for a candidate selection of a conda name mapping"""
+
+    PARSELMOUTH = "parselmouth"
+    GRAYSKULL = "grayskull"
+    CONDA_LOCK = "conda-lock"
+    OTHER = "other"
+
+
+class Candidate(BaseModel):
+    """One mapper's guess at the conda name for a PyPI package, along with
+    enough provenance to let a later, smarter mapper decide what to do
+    with it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    conda_name: CondaPackageName
+    probability: float = Field(ge=0.0, le=1.0)
+    source: CandidateSource
+    mapper: str
+
+
+NameMapper = Callable[
+    [NormalizedName, SpecifierSet, Sequence[Candidate]], str | Sequence[Candidate]
+]
+"""A callable taking a canonicalized PyPI name, a version specifier, and the
+candidates accumulated by earlier mappers in the chain. Returns either the
+final conda name as a `str` (ending the chain immediately, later mappers
+are not consulted), or a `Sequence[Candidate]` for the next mapper to
+consider -- typically the input `candidates` plus whatever new ones this
+mapper contributed.
+"""
+
+NameMappers = tuple[NameMapper, *tuple[NameMapper, ...]]
+"""A non-empty chain of `NameMapper` callables to parse a filename
 """
 
 
-class AmbiguousCondaName(Exception):
-    """Raised by a mapper that recognizes `name` but cannot produce a
-    single conda name for it, for either reason:
-
-    - Multiple conda candidates exist for one `(name, specifier)` pair.
-    - The conda name is not constant across the specifier's range.
-
-    Raising this aborts the whole chain in `map_name`: later mappers are
-    not consulted, because a dumber mapper must not be allowed to paper
-    over a known-ambiguous name with a confident wrong guess.
+class UnresolvedCandidates(Exception):
+    """Raised by `map_name` when every mapper in the chain has run and
+    none of them returned a final conda name
     """
 
     def __init__(
         self,
         name: str,
         specifier: SpecifierSet,
-        candidates: Iterable[str] = (),
+        candidates: Sequence[Candidate] = (),
     ) -> None:
         self.name = name
         self.specifier = specifier
         self.candidates = tuple(candidates)
         super().__init__(
-            f"ambiguous conda name for {name!r} (specifier={specifier!s}): "
+            f"no mapper resolved a conda name for {name!r} (specifier={specifier!s}): "
             f"candidates={self.candidates!r}"
         )
 
@@ -75,27 +99,44 @@ def exact_version(version: Version) -> SpecifierSet:
     return SpecifierSet(f"=={version}")
 
 
-def map_name(name: str, specifier: SpecifierSet, mappers: Sequence[NameMapper]) -> str:
-    """Resolve `name` to its conda equivalent by trying each of `mappers`
-    in order and returning the first non-`None` result verbatim.
+def map_name(name: str, specifier: SpecifierSet, mappers: NameMappers) -> str:
+    """Resolve `name` to its conda equivalent by threading a growing
+    sequence of `Candidate`s through each of `mappers` in order.
 
-    `name` is canonicalized before any mapper sees it, so every mapper
-    receives an identical, already-normalized name and none of them needs
-    to re-implement normalization. If every mapper returns `None`
-    (including an empty `mappers` sequence), the canonicalized PyPI name is
-    returned as the fallback.
+    `mappers` must be non-empty -- enforced by its type (`NameMappers`) and,
+    at runtime, by a `ValueError`. A caller that wants "no mapper has an
+    opinion, just use the normalized PyPI name" must request that policy
+    explicitly by ending the chain with `aggregator_mapper`
 
-    The returned `str` is **not** guaranteed to satisfy CEP 26 -- that
-    validation is the pydantic layer's job. This function raises nothing
-    itself: `AmbiguousCondaName` and any other mapper exception propagate
-    untouched.
+    `name` is canonicalized before any mapper sees it
+
+    If every mapper returns candidates, this raises `UnresolvedCandidates`
+    carrying the final candidate sequence
     """
+    if not mappers:
+        raise ValueError("map_name requires at least one mapper")
     normalized = canonicalize_name(name)
+    candidates: Sequence[Candidate] = ()
     for mapper in mappers:
-        result = mapper(normalized, specifier)
-        if result is not None:
+        result = mapper(normalized, specifier, candidates)
+        if isinstance(result, str):
             return result
-    return normalized
+        candidates = result
+    raise UnresolvedCandidates(normalized, specifier, candidates)
+
+
+def aggregator_mapper(
+    name: NormalizedName,
+    specifier: SpecifierSet,
+    candidates: Sequence[Candidate],
+) -> str | Sequence[Candidate]:
+    """A `NameMapper` meant to be placed last in a chain, where a decision
+    finally gets made from whatever `Candidate`s earlier mappers
+    contributed -- weighing `probability` and `source` against each
+    other.
+    """
+    del specifier
+    return candidates if candidates else name
 
 
 def static_mapper(table: Mapping[str, str]) -> NameMapper:
@@ -104,14 +145,21 @@ def static_mapper(table: Mapping[str, str]) -> NameMapper:
 
     The table is validated at construction time (every entry, not just the
     first bad one, is reported in one `ValidationError`). The specifier is
-    ignored: a static table is version-independent by construction, so this
-    mapper never raises `AmbiguousCondaName`.
+    ignored: a static table is version-independent by construction. A hit
+    returns the conda name directly as a `str` -- a hand-maintained
+    override is authoritative, not merely one more data point to weigh --
+    and a miss returns `candidates` unchanged.
     """
     validated = _StaticTable.model_validate(table).root
 
-    def _lookup(name: NormalizedName, specifier: SpecifierSet) -> str | None:
+    def _lookup(
+        name: NormalizedName,
+        specifier: SpecifierSet,
+        candidates: Sequence[Candidate],
+    ) -> str | Sequence[Candidate]:
         del specifier
-        return validated.get(name)
+        result = validated.get(name)
+        return candidates if result is None else result
 
     return _lookup
 

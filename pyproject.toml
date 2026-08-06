@@ -8,6 +8,7 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
+    "conda-lock>=4.0.2",
     "grayskull>=3.1.1",
     "packaging>=26.1",
     "pydantic>=2.13.4",
@@ -21,6 +22,9 @@ build-backend = "uv_build"
 # published package never pulls in test/lint/type-check tooling.
 [dependency-groups]
 dev = [
+    # conda-lock's vendored conda prefers the real `frozendict` and only falls
+    # back to its own deprecated copy (emitting a PendingDeprecationWarning) when absent
+    "frozendict>=2.4",
     "pytest>=8.3",
     "pytest-cov>=6.0",
     "ruff>=0.8",
@@ -37,6 +41,10 @@ addopts = [
     "--cov-report=xml",
 ]
 testpaths = ["tests"]
+filterwarnings = ["error"]
+markers = [
+    "network: requires outbound network access to a live upstream data source",
+]
 
 [tool.coverage.run]
 source = ["reroll"]

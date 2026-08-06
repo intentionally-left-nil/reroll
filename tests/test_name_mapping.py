@@ -109,14 +109,20 @@ class TestCandidate:
                 mapper="test",
             )
 
-    def test_conda_name_validated_per_cep_26(self) -> None:
-        with pytest.raises(ValidationError):
-            Candidate(
-                conda_name="Bad--Name",
-                probability=0.5,
-                source=CandidateSource.OTHER,
-                mapper="test",
-            )
+    def test_conda_name_is_not_validated_against_cep_26(self) -> None:
+        """CEP 26 validation is deferred entirely to whatever consumes the
+        final chosen name (e.g. `WheelConfig` in `reroll.filename`) -- an
+        intermediate candidate is just one mapper's still-unproven guess,
+        so it is not required to already be a legal name.
+        """
+        candidate = Candidate(
+            conda_name="Bad--Name",
+            probability=0.5,
+            source=CandidateSource.OTHER,
+            mapper="test",
+        )
+
+        assert candidate.conda_name == "Bad--Name"
 
     def test_frozen(self) -> None:
         candidate = Candidate(
@@ -525,13 +531,14 @@ class TestStaticMapper:
         assert mapper(canonicalize_name("tzdata"), SpecifierSet("==1.0"), ()) == "python-tzdata"
         assert mapper(canonicalize_name("tzdata"), SpecifierSet(">=2.0"), ()) == "python-tzdata"
 
-    def test_bad_table_reports_every_invalid_value_with_its_key(self) -> None:
-        with pytest.raises(ValidationError) as exc_info:
-            static_mapper({"good": "python-tzdata", "bad-one": "Bad--Name", "bad-two": "a" * 65})
+    def test_value_is_not_validated_against_cep_26(self) -> None:
+        """Mirrors `Candidate.conda_name`: validation is deferred entirely
+        to whatever consumes the final chosen name, not performed here --
+        so a hit is returned as-is even if it is not (yet) a legal name.
+        """
+        mapper = static_mapper({"tzdata": "Bad--Name"})
 
-        errors = exc_info.value.errors()
-        locs = {error["loc"][0] for error in errors}
-        assert locs == {"bad-one", "bad-two"}
+        assert mapper(canonicalize_name("tzdata"), SpecifierSet(""), ()) == "Bad--Name"
 
     def test_used_end_to_end_through_map_name_on_a_hit(self) -> None:
         mapper = static_mapper({"tzdata": "python-tzdata"})

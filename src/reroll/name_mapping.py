@@ -1,10 +1,7 @@
 """Pluggable PyPI -> conda name mapping.
 
 Background research (why mapping is hard, what the ecosystem tools do, how
-Parselmouth's data is shaped) lives in `docs/pypi_conda_mapping.md`. This
-module implements the resolution machinery only -- CEP 26 validation of the
-*output* lives in `reroll.conda_package_name`, and Parselmouth support of
-any kind is out of scope here (see `specs/name_mapping.md`).
+Parselmouth's data is shaped) lives in `docs/pypi_conda_mapping.md`
 """
 
 from __future__ import annotations
@@ -15,9 +12,7 @@ from enum import StrEnum
 from packaging.specifiers import SpecifierSet
 from packaging.utils import NormalizedName, canonicalize_name
 from packaging.version import Version
-from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator
-
-from reroll.conda_package_name import CondaPackageName
+from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
     "Candidate",
@@ -49,7 +44,7 @@ class Candidate(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    conda_name: CondaPackageName
+    conda_name: str
     probability: float = Field(ge=0.0, le=1.0)
     source: CandidateSource
     mapper: str
@@ -140,17 +135,8 @@ def aggregator_mapper(
 
 
 def static_mapper(table: Mapping[str, str]) -> NameMapper:
-    """Build a `NameMapper` from a literal table -- the grayskull-style
-    exception list that is the first thing most users will need.
-
-    The table is validated at construction time (every entry, not just the
-    first bad one, is reported in one `ValidationError`). The specifier is
-    ignored: a static table is version-independent by construction. A hit
-    returns the conda name directly as a `str` -- a hand-maintained
-    override is authoritative, not merely one more data point to weigh --
-    and a miss returns `candidates` unchanged.
-    """
-    validated = _StaticTable.model_validate(table).root
+    """Build a `NameMapper` from a literal table. Any hits are returned immediately"""
+    normalized_table = {canonicalize_name(key): value for key, value in table.items()}
 
     def _lookup(
         name: NormalizedName,
@@ -158,26 +144,7 @@ def static_mapper(table: Mapping[str, str]) -> NameMapper:
         candidates: Sequence[Candidate],
     ) -> str | Sequence[Candidate]:
         del specifier
-        result = validated.get(name)
+        result = normalized_table.get(name)
         return candidates if result is None else result
 
     return _lookup
-
-
-class _StaticTable(RootModel[dict[NormalizedName, CondaPackageName]]):
-    """Validates a `static_mapper` table at construction: keys are PEP 503
-    canonicalized and values must satisfy CEP 26. A `RootModel` (rather
-    than a loop calling `validate_package_name`) reports every bad entry at
-    once with its key in `loc`, instead of stopping at the first.
-
-    Key canonicalization runs as a plain `field_validator` on `root`,
-    `mode="before"`, rather than through an `Annotated` key type: the only
-    exported name callers need for "a canonicalized PyPI name" is
-    `packaging.utils.NormalizedName` itself, so this module does not mint a
-    second, confusingly similar type just to carry that one validator.
-    """
-
-    @field_validator("root", mode="before")
-    @classmethod
-    def _canonicalize_keys(cls, value: Mapping[str, str]) -> dict[str, str]:
-        return {canonicalize_name(key): entry for key, entry in value.items()}

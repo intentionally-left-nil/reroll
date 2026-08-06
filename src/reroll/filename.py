@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import logging
 import re
-from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum
 from typing import Annotated, Any
@@ -45,7 +44,7 @@ from pydantic import (
 from pydantic_core import core_schema
 
 from reroll.conda_package_name import CondaPackageName
-from reroll.name_mapping import AmbiguousCondaName, NameMapper, exact_version, map_name
+from reroll.name_mapping import NameMappers, UnresolvedCandidates, exact_version, map_name
 
 __all__ = [
     "AbiKind",
@@ -512,21 +511,14 @@ def _sort_key(config: WheelConfig) -> tuple[str, str, str, str]:
     )
 
 
-def parse_filename(filename: str, mappers: Sequence[NameMapper]) -> tuple[WheelConfig, ...]:
+def parse_filename(filename: str, mappers: NameMappers) -> tuple[WheelConfig, ...]:
     """Parse a wheel filename into zero or more `WheelConfig`s.
-
-    `mappers` is required, with no default: an empty chain (`()`) is a
-    legitimate policy ("always use the normalized PyPI name"), but it must
-    be requested explicitly rather than silently assumed by a caller who
-    forgot the argument.
 
     Never raises for filename input: an unparseable filename or a filename
     with no supported `(tag, arch)` combination both return `()`, and the
-    reason is logged at `DEBUG`. A mapper that raises `AmbiguousCondaName`
-    also yields `()`, but is logged at `WARNING` since (unlike the other
-    rejections) it has a concrete, actionable fix -- add a disambiguating
-    mapper. Any other exception a mapper raises propagates: the "never
-    raises" contract covers filename input only, not mapper bugs.
+    reason is logged at `DEBUG`. A mapper chain that raises
+    `UnresolvedCandidates` also yields `()`, but is logged at `WARNING`
+    since (unlike the other rejections) it has a concrete, actionable fix
     """
     try:
         name, version, build, tags = parse_wheel_filename(filename)
@@ -538,8 +530,8 @@ def parse_filename(filename: str, mappers: Sequence[NameMapper]) -> tuple[WheelC
     # before the tag loop below -- not once per `(tag, arch)` combination.
     try:
         conda_name = map_name(name, exact_version(version), mappers)
-    except AmbiguousCondaName as exc:
-        logger.warning("ambiguous conda name for wheel filename %r: %s", filename, exc)
+    except UnresolvedCandidates as exc:
+        logger.warning("unresolved conda name for wheel filename %r: %s", filename, exc)
         return ()
 
     configs: list[WheelConfig] = []

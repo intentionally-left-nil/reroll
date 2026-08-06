@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import itertools
 import logging
+from collections.abc import Sequence
+from typing import cast
 
 import pytest
 from packaging.specifiers import SpecifierSet
@@ -20,7 +22,11 @@ from reroll.filename import (
     parse_filename,
     supported_archs,
 )
-from reroll.name_mapping import AmbiguousCondaName, NameMapper
+from reroll.name_mapping import (
+    Candidate,
+    NameMappers,
+    aggregator_mapper,
+)
 
 
 def _config(
@@ -638,7 +644,7 @@ class TestNameAndVersionCoercion:
 
 class TestParseFilename:
     def test_happy_path(self) -> None:
-        (config,) = parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=())
+        (config,) = parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(aggregator_mapper,))
 
         assert config.normalized_pypi_name == "tinylib"
         assert config.version == Version("1.2.3")
@@ -648,45 +654,56 @@ class TestParseFilename:
         assert config.arch is None
 
     def test_compressed_tags_expand_to_multiple_configs(self) -> None:
-        configs = parse_filename("tinylib-1.2.3-py2.py3-none-any.whl", mappers=())
+        configs = parse_filename("tinylib-1.2.3-py2.py3-none-any.whl", mappers=(aggregator_mapper,))
 
         assert [c.interpreter for c in configs] == ["py3"]
 
     def test_compressed_tags_expand_all_valid_combinations(self) -> None:
-        configs = parse_filename("tinylib-1.2.3-py38.py39-none-any.whl", mappers=())
+        configs = parse_filename(
+            "tinylib-1.2.3-py38.py39-none-any.whl", mappers=(aggregator_mapper,)
+        )
 
         assert [c.interpreter for c in configs] == ["py38", "py39"]
 
     def test_universal2_produces_exactly_two_configs(self) -> None:
-        configs = parse_filename("tinylib-1.2.3-cp313-cp313-macosx_10_9_universal2.whl", mappers=())
+        configs = parse_filename(
+            "tinylib-1.2.3-cp313-cp313-macosx_10_9_universal2.whl", mappers=(aggregator_mapper,)
+        )
 
         assert len(configs) == 2
         assert {c.arch for c in configs} == {Arch.X86_64, Arch.ARM64}
 
     def test_unparseable_filename_returns_empty_tuple(self) -> None:
-        assert parse_filename("not-a-wheel-filename", mappers=()) == ()
+        assert parse_filename("not-a-wheel-filename", mappers=(aggregator_mapper,)) == ()
 
     def test_unparseable_filename_logs_at_debug(self, caplog: pytest.LogCaptureFixture) -> None:
         with caplog.at_level(logging.DEBUG, logger="reroll.filename"):
-            parse_filename("not-a-wheel-filename", mappers=())
+            parse_filename("not-a-wheel-filename", mappers=(aggregator_mapper,))
 
         assert "unparseable" in caplog.text
 
     def test_all_tags_unsupported_returns_empty_tuple(self) -> None:
         assert (
-            parse_filename("tinylib-1.2.3-cp313-cp313-musllinux_1_2_x86_64.whl", mappers=()) == ()
+            parse_filename(
+                "tinylib-1.2.3-cp313-cp313-musllinux_1_2_x86_64.whl", mappers=(aggregator_mapper,)
+            )
+            == ()
         )
 
     def test_rejection_logs_validation_errors_at_debug(
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         with caplog.at_level(logging.DEBUG, logger="reroll.filename"):
-            parse_filename("tinylib-1.2.3-cp313-cp313-musllinux_1_2_x86_64.whl", mappers=())
+            parse_filename(
+                "tinylib-1.2.3-cp313-cp313-musllinux_1_2_x86_64.whl", mappers=(aggregator_mapper,)
+            )
 
         assert "rejected" in caplog.text
 
     def test_build_tag_is_parsed(self) -> None:
-        (config,) = parse_filename("tinylib-1.2.3-1mybuild-py3-none-any.whl", mappers=())
+        (config,) = parse_filename(
+            "tinylib-1.2.3-1mybuild-py3-none-any.whl", mappers=(aggregator_mapper,)
+        )
 
         assert config.build == (1, "mybuild")
 
@@ -697,22 +714,25 @@ class TestParseFilename:
         `parse_filename` entry point rather than `WheelConfig` directly.
         """
         (config,) = parse_filename(
-            "tinylib-1.2.3-cp313-cp313mu-manylinux_2_17_x86_64.whl", mappers=()
+            "tinylib-1.2.3-cp313-cp313mu-manylinux_2_17_x86_64.whl", mappers=(aggregator_mapper,)
         )
 
         assert config.abi == "cp313"
 
     def test_debug_abi_suffix_still_drops_the_wheel_end_to_end(self) -> None:
         assert (
-            parse_filename("tinylib-1.2.3-cp313-cp313dmu-manylinux_2_17_x86_64.whl", mappers=())
+            parse_filename(
+                "tinylib-1.2.3-cp313-cp313dmu-manylinux_2_17_x86_64.whl",
+                mappers=(aggregator_mapper,),
+            )
             == ()
         )
 
     def test_sort_is_deterministic_across_calls(self) -> None:
         filename = "tinylib-1.2.3-py38.py39.py310-none-any.whl"
 
-        first = parse_filename(filename, mappers=())
-        second = parse_filename(filename, mappers=())
+        first = parse_filename(filename, mappers=(aggregator_mapper,))
+        second = parse_filename(filename, mappers=(aggregator_mapper,))
 
         assert first == second
         assert [c.interpreter for c in first] == ["py310", "py38", "py39"]
@@ -722,7 +742,9 @@ class TestParseFilename:
         (`py3-cp313` combined with `none` ABI) should keep only the
         installable one.
         """
-        configs = parse_filename("tinylib-1.2.3-py3.cp313-none-any.whl", mappers=())
+        configs = parse_filename(
+            "tinylib-1.2.3-py3.cp313-none-any.whl", mappers=(aggregator_mapper,)
+        )
 
         assert {c.interpreter for c in configs} == {"py3", "cp313"}
 
@@ -733,17 +755,25 @@ class TestParseFilename:
 
 
 class TestParseFilenameNameMapping:
-    def test_empty_mapper_chain_falls_back_to_normalized_pypi_name(self) -> None:
-        (config,) = parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=())
+    def test_empty_mapper_chain_raises_value_error(self) -> None:
+        empty: NameMappers = cast(NameMappers, ())
+
+        with pytest.raises(ValueError, match="at least one mapper"):
+            parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=empty)
+
+    def test_aggregator_mapper_falls_back_to_normalized_pypi_name(self) -> None:
+        (config,) = parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(aggregator_mapper,))
 
         assert config.conda_name == config.normalized_pypi_name == "tinylib"
 
     def test_mapper_result_reaches_conda_name(self) -> None:
-        def _mapper(name: NormalizedName, specifier: SpecifierSet) -> str | None:
-            del name, specifier
+        def _mapper(
+            name: NormalizedName, specifier: SpecifierSet, candidates: Sequence[Candidate]
+        ) -> str | Sequence[Candidate]:
+            del name, specifier, candidates
             return "python-tinylib"
 
-        (config,) = parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=[_mapper])
+        (config,) = parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(_mapper,))
 
         assert config.conda_name == "python-tinylib"
         assert config.normalized_pypi_name == "tinylib"
@@ -751,70 +781,91 @@ class TestParseFilenameNameMapping:
     def test_mapper_receives_the_exact_version_specifier(self) -> None:
         received: list[SpecifierSet] = []
 
-        def _mapper(name: NormalizedName, specifier: SpecifierSet) -> str | None:
+        def _mapper(
+            name: NormalizedName, specifier: SpecifierSet, candidates: Sequence[Candidate]
+        ) -> str | Sequence[Candidate]:
             del name
             received.append(specifier)
-            return None
+            return candidates
 
-        parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=[_mapper])
+        parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(_mapper, aggregator_mapper))
 
         assert received == [SpecifierSet("==1.2.3")]
 
     def test_mapper_is_invoked_exactly_once_for_multiple_configs(self) -> None:
         calls = 0
 
-        def _mapper(name: NormalizedName, specifier: SpecifierSet) -> str | None:
+        def _mapper(
+            name: NormalizedName, specifier: SpecifierSet, candidates: Sequence[Candidate]
+        ) -> str | Sequence[Candidate]:
             del name, specifier
             nonlocal calls
             calls += 1
-            return None
+            return candidates
 
         configs = parse_filename(
-            "tinylib-1.2.3-cp313-cp313-macosx_10_9_universal2.whl", mappers=[_mapper]
+            "tinylib-1.2.3-cp313-cp313-macosx_10_9_universal2.whl",
+            mappers=(_mapper, aggregator_mapper),
         )
 
         assert len(configs) == 2
         assert calls == 1
 
     def test_both_new_fields_are_identical_across_multi_config_filenames(self) -> None:
-        def _mapper(name: NormalizedName, specifier: SpecifierSet) -> str | None:
-            del name, specifier
+        def _mapper(
+            name: NormalizedName, specifier: SpecifierSet, candidates: Sequence[Candidate]
+        ) -> str | Sequence[Candidate]:
+            del name, specifier, candidates
             return "python-tinylib"
 
         configs = parse_filename(
-            "tinylib-1.2.3-cp313-cp313-macosx_10_9_universal2.whl", mappers=[_mapper]
+            "tinylib-1.2.3-cp313-cp313-macosx_10_9_universal2.whl", mappers=(_mapper,)
         )
 
         assert len(configs) == 2
         assert {c.normalized_pypi_name for c in configs} == {"tinylib"}
         assert {c.conda_name for c in configs} == {"python-tinylib"}
 
-    def test_ambiguous_conda_name_returns_empty_tuple(self) -> None:
-        def _raiser(name: NormalizedName, specifier: SpecifierSet) -> str | None:
-            raise AmbiguousCondaName(name, specifier, candidates=("opencv", "py-opencv"))
+    def test_unresolved_candidates_returns_empty_tuple(self) -> None:
+        def _no_opinion(
+            name: NormalizedName, specifier: SpecifierSet, candidates: Sequence[Candidate]
+        ) -> str | Sequence[Candidate]:
+            del name, specifier
+            return candidates
 
-        assert parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=[_raiser]) == ()
+        assert parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(_no_opinion,)) == ()
 
-    def test_ambiguous_conda_name_logs_at_warning(self, caplog: pytest.LogCaptureFixture) -> None:
-        def _raiser(name: NormalizedName, specifier: SpecifierSet) -> str | None:
-            raise AmbiguousCondaName(name, specifier, candidates=("opencv", "py-opencv"))
+    def test_unresolved_candidates_logs_at_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        def _no_opinion(
+            name: NormalizedName, specifier: SpecifierSet, candidates: Sequence[Candidate]
+        ) -> str | Sequence[Candidate]:
+            del name, specifier
+            return candidates
 
         with caplog.at_level(logging.WARNING, logger="reroll.filename"):
-            parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=[_raiser])
+            parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(_no_opinion,))
 
         assert caplog.records
         assert all(record.levelno == logging.WARNING for record in caplog.records)
 
     def test_overlong_conda_name_returns_empty_tuple(self) -> None:
-        mapper: NameMapper = lambda name, specifier: "a" * 65  # noqa: E731
+        def _mapper(
+            name: NormalizedName, specifier: SpecifierSet, candidates: Sequence[Candidate]
+        ) -> str | Sequence[Candidate]:
+            del name, specifier, candidates
+            return "a" * 65
 
-        assert parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=[mapper]) == ()
+        assert parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(_mapper,)) == ()
 
     def test_overlong_conda_name_logs_at_debug(self, caplog: pytest.LogCaptureFixture) -> None:
-        mapper: NameMapper = lambda name, specifier: "a" * 65  # noqa: E731
+        def _mapper(
+            name: NormalizedName, specifier: SpecifierSet, candidates: Sequence[Candidate]
+        ) -> str | Sequence[Candidate]:
+            del name, specifier, candidates
+            return "a" * 65
 
         with caplog.at_level(logging.DEBUG, logger="reroll.filename"):
-            parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=[mapper])
+            parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(_mapper,))
 
         assert "rejected" in caplog.text
 

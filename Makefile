@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install lint format format-check typecheck test coverage-html ci clean
+.PHONY: help install lint format format-check typecheck test test-offline coverage-html ci clean
 
 help:
 	@echo "Targets:"
@@ -8,7 +8,8 @@ help:
 	@echo "  format            Run ruff format (rewrites files)"
 	@echo "  format-check      Run ruff format --check (no rewrites, for CI)"
 	@echo "  typecheck         Run ty check"
-	@echo "  test              Run the unit test suite"
+	@echo "  test              Run the full test suite, including network tests"
+	@echo "  test-offline      Run only the tests that need no network access"
 	@echo "  coverage-html     Run tests and open an HTML coverage report"
 	@echo "  ci                Run everything CI runs: lint, format-check, typecheck, test"
 	@echo "  clean             Remove caches and coverage artifacts"
@@ -30,6 +31,9 @@ typecheck:
 
 test:
 	uv run pytest
+
+test-offline:
+	uv run pytest -m "not network"
 
 coverage-html:
 	uv run pytest --cov-report=html

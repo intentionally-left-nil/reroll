@@ -9,8 +9,6 @@ from typing import Annotated
 
 from pydantic import AfterValidator
 
-__all__ = ["CondaPackageName", "validate_package_name"]
-
 _MAX_NAME_LENGTH = 64
 
 # Transcribed verbatim from CEP 26 -- the regex, not the CEP's prose, is the

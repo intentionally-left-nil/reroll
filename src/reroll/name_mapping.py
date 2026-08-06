@@ -1,7 +1,6 @@
 """Pluggable PyPI -> conda name mapping.
 
-Background research (why mapping is hard, what the ecosystem tools do, how
-Parselmouth's data is shaped) lives in `docs/pypi_conda_mapping.md`
+Background lives in `docs/pypi_conda_mapping.md`.
 """
 
 from __future__ import annotations
@@ -13,18 +12,6 @@ from packaging.specifiers import SpecifierSet
 from packaging.utils import NormalizedName, canonicalize_name
 from packaging.version import Version
 from pydantic import BaseModel, ConfigDict, Field
-
-__all__ = [
-    "Candidate",
-    "CandidateSource",
-    "NameMapper",
-    "NameMappers",
-    "UnresolvedCandidates",
-    "aggregator_mapper",
-    "exact_version",
-    "map_name",
-    "static_mapper",
-]
 
 
 class CandidateSource(StrEnum):

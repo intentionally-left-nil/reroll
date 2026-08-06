@@ -1,7 +1,7 @@
 """Grayskull-backed PyPI -> conda name mapping.
 
-Wires `reroll.name_mapping`'s `NameMapper` chain up to the community-curated table
-grayskull ships in `grayskull/strategy/config.yaml`:
+Wires the community-curated table from `grayskull/strategy/config.yaml` into
+a `NameMapper`.
 """
 
 from __future__ import annotations
@@ -15,8 +15,6 @@ from packaging.specifiers import SpecifierSet
 from packaging.utils import NormalizedName, canonicalize_name
 
 from reroll.name_mapping import Candidate, CandidateSource, NameMapper
-
-__all__ = ["grayskull_mapper"]
 
 _MAPPER_NAME = "grayskull_config"
 

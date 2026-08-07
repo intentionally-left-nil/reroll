@@ -33,8 +33,10 @@ Every edge case gets a test *before* the code that handles it exists.
   drivable from a single unit test's `METADATA` fixture.
 - Module docstrings are terse: one or two lines saying what the module is
   for, not a tour of its contents.
-- Avoid `__all__`. The only exception is the root `src/reroll/__init__.py`,
-  which defines the package's public API.
+- Avoid `__all__`. The only exception is a package's `__init__.py` (the
+  root `src/reroll/__init__.py`, or a subpackage's, e.g.
+  `src/reroll/filename/__init__.py`), which defines that package's public
+  API.
 - Within a file, public functions come first, in the order a reader would
   want to encounter them; private (`_`-prefixed) helpers go at the bottom.
 - If a file keeps growing more than one distinct public/private section

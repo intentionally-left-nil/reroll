@@ -394,8 +394,46 @@ class TestScoreEvidence:
                     claimed_by_other=True,
                 )
             ),
+            score_evidence(_evidence(n_versions_agree=50, n_versions_disagree=30)),
         ):
             assert 0.0 <= value <= 1.0
+
+    def test_mixed_evidence_scores_lower_than_clean_agreement_at_the_same_volume(
+        self,
+    ) -> None:
+        # Same agreeing volume, but the second package also has substantial
+        # contradicting evidence, so it must score lower.
+        clean = score_evidence(_evidence(n_versions_agree=50, n_versions_disagree=0))
+        mixed = score_evidence(_evidence(n_versions_agree=50, n_versions_disagree=30))
+        assert clean > mixed
+
+    def test_mixed_evidence_sits_strictly_between_the_pure_agree_and_disagree_scores(
+        self,
+    ) -> None:
+        clean_agree = score_evidence(_evidence(n_versions_agree=1, n_versions_disagree=0))
+        mixed = score_evidence(_evidence(n_versions_agree=5, n_versions_disagree=5))
+        clean_disagree = score_evidence(_evidence(n_versions_agree=0, n_versions_disagree=1))
+        assert clean_agree > mixed > clean_disagree
+
+    def test_more_disagreement_lowers_the_mixed_score_further(self) -> None:
+        few_disagree = score_evidence(_evidence(n_versions_agree=50, n_versions_disagree=1))
+        many_disagree = score_evidence(_evidence(n_versions_agree=50, n_versions_disagree=30))
+        assert few_disagree > many_disagree
+
+    def test_more_agreeing_volume_raises_the_mixed_score(self) -> None:
+        # 50 agreeing versions is stronger corroborating evidence than 1, even against
+        # the same fixed number of disagreeing versions.
+        low_volume = score_evidence(_evidence(n_versions_agree=1, n_versions_disagree=1))
+        high_volume = score_evidence(_evidence(n_versions_agree=50, n_versions_disagree=1))
+        assert high_volume > low_volume
+
+    def test_a_single_disagreement_against_many_agreements_barely_moves_the_score(
+        self,
+    ) -> None:
+        clean = score_evidence(_evidence(n_versions_agree=1000, n_versions_disagree=0))
+        almost_clean = score_evidence(_evidence(n_versions_agree=1000, n_versions_disagree=1))
+        assert clean > almost_clean
+        assert clean - almost_clean < 0.001
 
 
 # --------------------------------------------------------------------------

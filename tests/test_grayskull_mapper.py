@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 
 from reroll.grayskull_mapper import grayskull_mapper
@@ -70,7 +69,7 @@ class TestGrayskullMapperHit:
     def test_hit_contributes_a_candidate_with_probability_one(self, fixture_config: Path) -> None:
         mapper = grayskull_mapper(fixture_config)
 
-        result = mapper(canonicalize_name("annoy"), SpecifierSet(""), ())
+        result = mapper(canonicalize_name("annoy"), ())
 
         assert result == (
             Candidate(
@@ -84,7 +83,7 @@ class TestGrayskullMapperHit:
     def test_hit_never_returns_a_str_the_chain_is_not_stopped(self, fixture_config: Path) -> None:
         mapper = grayskull_mapper(fixture_config)
 
-        result = mapper(canonicalize_name("annoy"), SpecifierSet(""), ())
+        result = mapper(canonicalize_name("annoy"), ())
 
         assert not isinstance(result, str)
 
@@ -92,7 +91,7 @@ class TestGrayskullMapperHit:
         mapper = grayskull_mapper(fixture_config)
         earlier = (_other_candidate(),)
 
-        result = mapper(canonicalize_name("annoy"), SpecifierSet(""), earlier)
+        result = mapper(canonicalize_name("annoy"), earlier)
 
         assert result == (
             earlier[0],
@@ -103,14 +102,6 @@ class TestGrayskullMapperHit:
                 mapper="grayskull_config",
             ),
         )
-
-    def test_specifier_is_ignored(self, fixture_config: Path) -> None:
-        mapper = grayskull_mapper(fixture_config)
-
-        with_low = mapper(canonicalize_name("annoy"), SpecifierSet("==1.0"), ())
-        with_high = mapper(canonicalize_name("annoy"), SpecifierSet(">=2.0"), ())
-
-        assert with_low == with_high
 
 
 # --------------------------------------------------------------------------
@@ -123,14 +114,14 @@ class TestGrayskullMapperMiss:
         mapper = grayskull_mapper(fixture_config)
         candidates = (_other_candidate(),)
 
-        result = mapper(canonicalize_name("requests"), SpecifierSet(""), candidates)
+        result = mapper(canonicalize_name("requests"), candidates)
 
         assert result is candidates
 
     def test_miss_on_empty_candidates_returns_empty(self, fixture_config: Path) -> None:
         mapper = grayskull_mapper(fixture_config)
 
-        result = mapper(canonicalize_name("requests"), SpecifierSet(""), ())
+        result = mapper(canonicalize_name("requests"), ())
 
         assert result == ()
 
@@ -149,7 +140,7 @@ class TestGrayskullMapperMalformedEntry:
     ) -> None:
         mapper = grayskull_mapper(malformed_fixture_config)
 
-        result = mapper(canonicalize_name("badpkg"), SpecifierSet(""), ())
+        result = mapper(canonicalize_name("badpkg"), ())
 
         assert result == (
             Candidate(
@@ -165,7 +156,7 @@ class TestGrayskullMapperMalformedEntry:
     ) -> None:
         mapper = grayskull_mapper(malformed_fixture_config)
 
-        result = mapper(canonicalize_name("annoy"), SpecifierSet(""), ())
+        result = mapper(canonicalize_name("annoy"), ())
 
         assert result == (
             Candidate(
@@ -192,7 +183,7 @@ class TestGrayskullMapperEndToEnd:
         mapper = grayskull_mapper(fixture_config)
 
         with pytest.raises(UnresolvedCandidates) as exc_info:
-            map_name("annoy", SpecifierSet(""), (mapper, aggregator_mapper))
+            map_name("annoy", (mapper, aggregator_mapper))
 
         (candidate,) = exc_info.value.candidates
         assert candidate.conda_name == "python-annoy"
@@ -204,7 +195,7 @@ class TestGrayskullMapperEndToEnd:
     ) -> None:
         mapper = grayskull_mapper(fixture_config)
 
-        result = map_name("requests", SpecifierSet(""), (mapper, aggregator_mapper))
+        result = map_name("requests", (mapper, aggregator_mapper))
 
         assert result == "requests"
 
@@ -218,7 +209,7 @@ class TestGrayskullMapperDefaultConfig:
     def test_default_config_is_loaded_from_the_installed_grayskull_package(self) -> None:
         mapper = grayskull_mapper()
 
-        result = mapper(canonicalize_name("annoy"), SpecifierSet(""), ())
+        result = mapper(canonicalize_name("annoy"), ())
 
         assert result == (
             Candidate(
@@ -233,6 +224,6 @@ class TestGrayskullMapperDefaultConfig:
         mapper = grayskull_mapper()
         name = canonicalize_name("this-package-does-not-exist-anywhere")
 
-        result = mapper(name, SpecifierSet(""), ())
+        result = mapper(name, ())
 
         assert result == ()

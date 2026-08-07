@@ -14,7 +14,6 @@ from typing import TypedDict
 
 from conda_lock.lookup import DEFAULT_MAPPING_URL, _get_pypi_lookup
 from conda_lock.lookup_cache import cached_download_file
-from packaging.specifiers import SpecifierSet
 from packaging.utils import NormalizedName, canonicalize_name
 from pydantic import TypeAdapter
 
@@ -90,10 +89,8 @@ def candidate_mapper(candidates: Mapping[NormalizedName, Candidate]) -> NameMapp
 
     def _lookup(
         name: NormalizedName,
-        specifier: SpecifierSet,
         accumulated: Sequence[Candidate],
     ) -> Sequence[Candidate]:
-        del specifier
         candidate = candidates.get(name)
         if candidate is None:
             return accumulated

@@ -768,9 +768,9 @@ class TestParseFilenameNameMapping:
 
     def test_mapper_result_reaches_conda_name(self) -> None:
         def _mapper(
-            name: NormalizedName, specifier: SpecifierSet, candidates: Sequence[Candidate]
+            name: NormalizedName, candidates: Sequence[Candidate]
         ) -> str | Sequence[Candidate]:
-            del name, specifier, candidates
+            del name, candidates
             return "python-tinylib"
 
         (config,) = parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(_mapper,))
@@ -778,27 +778,13 @@ class TestParseFilenameNameMapping:
         assert config.conda_name == "python-tinylib"
         assert config.normalized_pypi_name == "tinylib"
 
-    def test_mapper_receives_the_exact_version_specifier(self) -> None:
-        received: list[SpecifierSet] = []
-
-        def _mapper(
-            name: NormalizedName, specifier: SpecifierSet, candidates: Sequence[Candidate]
-        ) -> str | Sequence[Candidate]:
-            del name
-            received.append(specifier)
-            return candidates
-
-        parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(_mapper, aggregator_mapper))
-
-        assert received == [SpecifierSet("==1.2.3")]
-
     def test_mapper_is_invoked_exactly_once_for_multiple_configs(self) -> None:
         calls = 0
 
         def _mapper(
-            name: NormalizedName, specifier: SpecifierSet, candidates: Sequence[Candidate]
+            name: NormalizedName, candidates: Sequence[Candidate]
         ) -> str | Sequence[Candidate]:
-            del name, specifier
+            del name
             nonlocal calls
             calls += 1
             return candidates
@@ -813,9 +799,9 @@ class TestParseFilenameNameMapping:
 
     def test_both_new_fields_are_identical_across_multi_config_filenames(self) -> None:
         def _mapper(
-            name: NormalizedName, specifier: SpecifierSet, candidates: Sequence[Candidate]
+            name: NormalizedName, candidates: Sequence[Candidate]
         ) -> str | Sequence[Candidate]:
-            del name, specifier, candidates
+            del name, candidates
             return "python-tinylib"
 
         configs = parse_filename(
@@ -828,18 +814,18 @@ class TestParseFilenameNameMapping:
 
     def test_unresolved_candidates_returns_empty_tuple(self) -> None:
         def _no_opinion(
-            name: NormalizedName, specifier: SpecifierSet, candidates: Sequence[Candidate]
+            name: NormalizedName, candidates: Sequence[Candidate]
         ) -> str | Sequence[Candidate]:
-            del name, specifier
+            del name
             return candidates
 
         assert parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(_no_opinion,)) == ()
 
     def test_unresolved_candidates_logs_at_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         def _no_opinion(
-            name: NormalizedName, specifier: SpecifierSet, candidates: Sequence[Candidate]
+            name: NormalizedName, candidates: Sequence[Candidate]
         ) -> str | Sequence[Candidate]:
-            del name, specifier
+            del name
             return candidates
 
         with caplog.at_level(logging.WARNING, logger="reroll.filename"):
@@ -850,18 +836,18 @@ class TestParseFilenameNameMapping:
 
     def test_overlong_conda_name_returns_empty_tuple(self) -> None:
         def _mapper(
-            name: NormalizedName, specifier: SpecifierSet, candidates: Sequence[Candidate]
+            name: NormalizedName, candidates: Sequence[Candidate]
         ) -> str | Sequence[Candidate]:
-            del name, specifier, candidates
+            del name, candidates
             return "a" * 65
 
         assert parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(_mapper,)) == ()
 
     def test_overlong_conda_name_logs_at_debug(self, caplog: pytest.LogCaptureFixture) -> None:
         def _mapper(
-            name: NormalizedName, specifier: SpecifierSet, candidates: Sequence[Candidate]
+            name: NormalizedName, candidates: Sequence[Candidate]
         ) -> str | Sequence[Candidate]:
-            del name, specifier, candidates
+            del name, candidates
             return "a" * 65
 
         with caplog.at_level(logging.DEBUG, logger="reroll.filename"):

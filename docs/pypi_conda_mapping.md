@@ -75,7 +75,7 @@ Reroll, by intent, will be converting pypi packages which do not exist in a cond
 # Dealing with uncertainty
 To provide for multiple sources to increase the confidence, the mapper API supports returning an array of candidates, along with their probabilities (and metadata about who is choosing the probabilities). This allows for composable algorithms which probe a source (potentially multiple times with different pieces of logic), and logic-only mappers which try to determine success from multiple sources.
 
-A mapper is a function of `(name, specifier, candidates) -> name | candidates`:
+A mapper is a function of `(name, candidates) -> name | candidates`:
 
 * `candidates` in and out is an array of `Candidate`, not a set. The same conda name can appear multiple times, contributed independently by different sources -- deduplication and aggregation (e.g. "three sources independently guessed `python-tzdata`, so raise its combined confidence") is itself something a logic-only mapper does, not something the chain does for free.
 * A `Candidate` has:

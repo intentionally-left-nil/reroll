@@ -11,7 +11,6 @@ from pathlib import Path
 
 from grayskull.base.track_packages import ConfigPkg, _get_track_info_from_file
 from grayskull.strategy.pypi import PYPI_CONFIG
-from packaging.specifiers import SpecifierSet
 from packaging.utils import NormalizedName, canonicalize_name
 
 from reroll.name_mapping import Candidate, CandidateSource, NameMapper
@@ -42,10 +41,8 @@ def grayskull_mapper(config_file: Path | str = PYPI_CONFIG) -> NameMapper:
 
     def _lookup(
         name: NormalizedName,
-        specifier: SpecifierSet,
         candidates: Sequence[Candidate],
     ) -> Sequence[Candidate]:
-        del specifier
         candidate = resolved.get(name)
         if candidate is None:
             return candidates

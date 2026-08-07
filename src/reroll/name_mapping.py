@@ -8,9 +8,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from enum import StrEnum
 
-from packaging.specifiers import SpecifierSet
 from packaging.utils import NormalizedName, canonicalize_name
-from packaging.version import Version
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -37,11 +35,9 @@ class Candidate(BaseModel):
     mapper: str
 
 
-NameMapper = Callable[
-    [NormalizedName, SpecifierSet, Sequence[Candidate]], str | Sequence[Candidate]
-]
-"""A callable taking a canonicalized PyPI name, a version specifier, and the
-candidates accumulated by earlier mappers in the chain. Returns either the
+NameMapper = Callable[[NormalizedName, Sequence[Candidate]], str | Sequence[Candidate]]
+"""A callable taking a canonicalized PyPI name and the candidates
+accumulated by earlier mappers in the chain. Returns either the
 final conda name as a `str` (ending the chain immediately, later mappers
 are not consulted), or a `Sequence[Candidate]` for the next mapper to
 consider -- typically the input `candidates` plus whatever new ones this
@@ -61,27 +57,16 @@ class UnresolvedCandidates(Exception):
     def __init__(
         self,
         name: str,
-        specifier: SpecifierSet,
         candidates: Sequence[Candidate] = (),
     ) -> None:
         self.name = name
-        self.specifier = specifier
         self.candidates = tuple(candidates)
         super().__init__(
-            f"no mapper resolved a conda name for {name!r} (specifier={specifier!s}): "
-            f"candidates={self.candidates!r}"
+            f"no mapper resolved a conda name for {name!r}: candidates={self.candidates!r}"
         )
 
 
-def exact_version(version: Version) -> SpecifierSet:
-    """`SpecifierSet(f"=={version}")` -- the only place that construction
-    appears, so the edge cases (epochs, local versions, dev/post/rc
-    segments) are pinned once.
-    """
-    return SpecifierSet(f"=={version}")
-
-
-def map_name(name: str, specifier: SpecifierSet, mappers: NameMappers) -> str:
+def map_name(name: str, mappers: NameMappers) -> str:
     """Resolve `name` to its conda equivalent by threading a growing
     sequence of `Candidate`s through each of `mappers` in order.
 
@@ -100,16 +85,15 @@ def map_name(name: str, specifier: SpecifierSet, mappers: NameMappers) -> str:
     normalized = canonicalize_name(name)
     candidates: Sequence[Candidate] = ()
     for mapper in mappers:
-        result = mapper(normalized, specifier, candidates)
+        result = mapper(normalized, candidates)
         if isinstance(result, str):
             return result
         candidates = result
-    raise UnresolvedCandidates(normalized, specifier, candidates)
+    raise UnresolvedCandidates(normalized, candidates)
 
 
 def aggregator_mapper(
     name: NormalizedName,
-    specifier: SpecifierSet,
     candidates: Sequence[Candidate],
 ) -> str | Sequence[Candidate]:
     """A `NameMapper` meant to be placed last in a chain, where a decision
@@ -117,7 +101,6 @@ def aggregator_mapper(
     contributed -- weighing `probability` and `source` against each
     other.
     """
-    del specifier
     return candidates if candidates else name
 
 
@@ -127,10 +110,8 @@ def static_mapper(table: Mapping[str, str]) -> NameMapper:
 
     def _lookup(
         name: NormalizedName,
-        specifier: SpecifierSet,
         candidates: Sequence[Candidate],
     ) -> str | Sequence[Candidate]:
-        del specifier
         result = normalized_table.get(name)
         return candidates if result is None else result
 

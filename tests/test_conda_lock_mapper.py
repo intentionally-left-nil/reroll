@@ -9,7 +9,6 @@ from typing import Any
 
 import pytest
 from conda_lock.lookup import _get_pypi_lookup
-from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 
 import reroll.conda_lock_mapper as conda_lock_mapper_module
@@ -324,36 +323,30 @@ def _table(conda_name: str = "python-annoy") -> dict[Any, Candidate]:
 class TestCandidateMapperHit:
     def test_hit_contributes_its_candidate(self) -> None:
         mapper = candidate_mapper(_table())
-        result = mapper(canonicalize_name("annoy"), SpecifierSet(), ())
+        result = mapper(canonicalize_name("annoy"), ())
         assert result == (_table()[canonicalize_name("annoy")],)
 
     def test_hit_does_not_end_the_chain(self) -> None:
         mapper = candidate_mapper(_table())
-        result = mapper(canonicalize_name("annoy"), SpecifierSet(), ())
+        result = mapper(canonicalize_name("annoy"), ())
         assert not isinstance(result, str)
 
     def test_hit_appends_after_earlier_candidates(self) -> None:
         mapper = candidate_mapper(_table())
         earlier = _other_candidate()
-        result = mapper(canonicalize_name("annoy"), SpecifierSet(), (earlier,))
+        result = mapper(canonicalize_name("annoy"), (earlier,))
         assert list(result) == [earlier, _table()[canonicalize_name("annoy")]]
-
-    def test_specifier_is_ignored(self) -> None:
-        mapper = candidate_mapper(_table())
-        pinned = mapper(canonicalize_name("annoy"), SpecifierSet("==1.17.0"), ())
-        unpinned = mapper(canonicalize_name("annoy"), SpecifierSet(), ())
-        assert pinned == unpinned
 
 
 class TestCandidateMapperMiss:
     def test_miss_returns_candidates_unchanged(self) -> None:
         mapper = candidate_mapper(_table())
         earlier = (_other_candidate(),)
-        assert mapper(canonicalize_name("nonexistent"), SpecifierSet(), earlier) is earlier
+        assert mapper(canonicalize_name("nonexistent"), earlier) is earlier
 
     def test_miss_on_empty_candidates(self) -> None:
         mapper = candidate_mapper(_table())
-        assert mapper(canonicalize_name("nonexistent"), SpecifierSet(), ()) == ()
+        assert mapper(canonicalize_name("nonexistent"), ()) == ()
 
 
 # --------------------------------------------------------------------------
@@ -402,7 +395,7 @@ class TestCondaLockMapperFromFiles:
         mapper = conda_lock_mapper(
             mapping_url=mapping, priority_url=priority, name_mapping_url=names
         )
-        candidate = _only(mapper(canonicalize_name("build"), SpecifierSet(), ()))
+        candidate = _only(mapper(canonicalize_name("build"), ()))
         assert candidate.conda_name == "python-build"
         assert candidate.probability == STATIC_PROBABILITY
 
@@ -411,7 +404,7 @@ class TestCondaLockMapperFromFiles:
         mapper = conda_lock_mapper(
             mapping_url=mapping, priority_url=priority, name_mapping_url=names
         )
-        candidate = _only(mapper(canonicalize_name("annoy"), SpecifierSet(), ()))
+        candidate = _only(mapper(canonicalize_name("annoy"), ()))
         assert candidate.probability == UNAMBIGUOUS_PROBABILITY
 
     def test_ambiguous_entry(self, local_tables: tuple[Path, Path, Path]) -> None:
@@ -419,7 +412,7 @@ class TestCondaLockMapperFromFiles:
         mapper = conda_lock_mapper(
             mapping_url=mapping, priority_url=priority, name_mapping_url=names
         )
-        candidate = _only(mapper(canonicalize_name("levenshtein"), SpecifierSet(), ()))
+        candidate = _only(mapper(canonicalize_name("levenshtein"), ()))
         assert candidate.probability == AMBIGUOUS_PROBABILITY
 
     def test_miss_passes_through(self, local_tables: tuple[Path, Path, Path]) -> None:
@@ -427,7 +420,7 @@ class TestCondaLockMapperFromFiles:
         mapper = conda_lock_mapper(
             mapping_url=mapping, priority_url=priority, name_mapping_url=names
         )
-        assert mapper(canonicalize_name("nonexistent"), SpecifierSet(), ()) == ()
+        assert mapper(canonicalize_name("nonexistent"), ()) == ()
 
     def test_file_url_scheme_is_accepted(self, local_tables: tuple[Path, Path, Path]) -> None:
         mapping, priority, names = local_tables
@@ -436,7 +429,7 @@ class TestCondaLockMapperFromFiles:
             priority_url=f"file://{priority}",
             name_mapping_url=f"file://{names}",
         )
-        candidate = _only(mapper(canonicalize_name("annoy"), SpecifierSet(), ()))
+        candidate = _only(mapper(canonicalize_name("annoy"), ()))
         assert candidate.conda_name == "python-annoy"
 
 
@@ -465,9 +458,7 @@ class TestCondaLockMapperFromHttp:
             priority_url="https://example.test/import_name_priority_mapping.json",
             name_mapping_url="https://example.test/name_mapping.json",
         )
-        assert _only(mapper(canonicalize_name("annoy"), SpecifierSet(), ())).conda_name == (
-            "python-annoy"
-        )
+        assert _only(mapper(canonicalize_name("annoy"), ())).conda_name == ("python-annoy")
         assert sorted(requested) == sorted(by_url)
 
 
@@ -504,12 +495,8 @@ class TestCondaLockMapperCaching:
             mapping_url=mapping, priority_url=priority, name_mapping_url=names
         )
         second = conda_lock_mapper(mapping_url=other, priority_url=priority, name_mapping_url=names)
-        assert _only(first(canonicalize_name("annoy"), SpecifierSet(), ())).conda_name == (
-            "python-annoy"
-        )
-        assert _only(second(canonicalize_name("annoy"), SpecifierSet(), ())).conda_name == (
-            "annoy-but-different"
-        )
+        assert _only(first(canonicalize_name("annoy"), ())).conda_name == ("python-annoy")
+        assert _only(second(canonicalize_name("annoy"), ())).conda_name == ("annoy-but-different")
 
     def test_yaml_mapping_table_is_accepted(self, tmp_path: Path) -> None:
         # conda-lock's loader dispatches on extension, so the upstream
@@ -529,9 +516,7 @@ class TestCondaLockMapperCaching:
         mapper = conda_lock_mapper(
             mapping_url=mapping, priority_url=priority, name_mapping_url=names
         )
-        assert _only(mapper(canonicalize_name("annoy"), SpecifierSet(), ())).conda_name == (
-            "python-annoy"
-        )
+        assert _only(mapper(canonicalize_name("annoy"), ())).conda_name == ("python-annoy")
 
 
 # --------------------------------------------------------------------------
@@ -548,7 +533,7 @@ class TestCondaLockMapperEndToEnd:
             mapping_url=mapping, priority_url=priority, name_mapping_url=names
         )
         with pytest.raises(UnresolvedCandidates) as excinfo:
-            map_name("annoy", SpecifierSet(), (mapper, aggregator_mapper))
+            map_name("annoy", (mapper, aggregator_mapper))
         assert [c.conda_name for c in excinfo.value.candidates] == ["python-annoy"]
 
     def test_miss_plus_aggregator_falls_back_to_normalized_name(
@@ -558,7 +543,7 @@ class TestCondaLockMapperEndToEnd:
         mapper = conda_lock_mapper(
             mapping_url=mapping, priority_url=priority, name_mapping_url=names
         )
-        assert map_name("No_Such.Pkg", SpecifierSet(), (mapper, aggregator_mapper)) == "no-such-pkg"
+        assert map_name("No_Such.Pkg", (mapper, aggregator_mapper)) == "no-such-pkg"
 
 
 # --------------------------------------------------------------------------
@@ -570,15 +555,15 @@ class TestCondaLockMapperDefaultTables:
     @pytest.mark.network
     def test_known_mappings_resolve(self) -> None:
         mapper = conda_lock_mapper()
-        annoy = _only(mapper(canonicalize_name("annoy"), SpecifierSet(), ()))
+        annoy = _only(mapper(canonicalize_name("annoy"), ()))
         assert annoy.conda_name == "python-annoy"
         # `tzdata` is the canonical Grayskull failure case; conda-forge-bot
         # pins it in the static override table.
-        tzdata = _only(mapper(canonicalize_name("tzdata"), SpecifierSet(), ()))
+        tzdata = _only(mapper(canonicalize_name("tzdata"), ()))
         assert tzdata.conda_name == "python-tzdata"
         assert tzdata.probability == STATIC_PROBABILITY
 
     @pytest.mark.network
     def test_nonexistent_name_misses(self) -> None:
         mapper = conda_lock_mapper()
-        assert mapper(canonicalize_name("zpfqzvrj"), SpecifierSet(), ()) == ()
+        assert mapper(canonicalize_name("zpfqzvrj"), ()) == ()

@@ -1,12 +1,16 @@
 """Parselmouth-backed PyPI -> conda name mapping.
 
-`open_parselmouth_database` keeps a local sqlite evidence database current
-with parselmouth's `relations-v1` table; `parselmouth_mapper` builds a
-`NameMapper` that reads it. Background: `docs/pypi_conda_mapping.md`.
+`parselmouth_mapper` builds a `NameMapper` from a local sqlite evidence
+database at a fixed cache path, downloading or refreshing it from
+parselmouth's `relations-v1` table first if necessary. Background:
+`docs/pypi_conda_mapping.md`.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from reroll.name_mapping import NameMapper
 from reroll.parselmouth_mapper.db import open_parselmouth_database, write_relations
 from reroll.parselmouth_mapper.ingest import (
     DEFAULT_CHANNEL,
@@ -15,7 +19,7 @@ from reroll.parselmouth_mapper.ingest import (
     download_relations,
     iter_relations,
 )
-from reroll.parselmouth_mapper.mapper import parselmouth_mapper
+from reroll.parselmouth_mapper.mapper import _mapper_from_connection
 from reroll.parselmouth_mapper.names import (
     NameAxis,
     NameClass,
@@ -61,3 +65,15 @@ __all__ = [
     "version_state",
     "write_relations",
 ]
+
+
+def parselmouth_mapper() -> NameMapper:
+    """Build a `NameMapper` from parselmouth's local evidence database,
+    downloading or refreshing it from upstream first if necessary
+    """
+    connection = open_parselmouth_database(_default_db_path())
+    return _mapper_from_connection(connection)
+
+
+def _default_db_path() -> Path:
+    return Path.home() / ".cache" / "reroll" / "parselmouth.sqlite3"

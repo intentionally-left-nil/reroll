@@ -1,4 +1,7 @@
-"""Building a `NameMapper` from a parselmouth evidence database."""
+"""Building a `NameMapper` from an already-open parselmouth evidence
+database connection. This is an internal building block; most callers
+want the connection-free `reroll.parselmouth_mapper.parselmouth_mapper`.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +17,7 @@ from reroll.parselmouth_mapper.scoring import CandidateEvidence, score_evidence
 _MAPPER_NAME = "parselmouth_relations"
 
 
-def parselmouth_mapper(connection: sqlite3.Connection) -> NameMapper:
+def _mapper_from_connection(connection: sqlite3.Connection) -> NameMapper:
     """Build a `NameMapper` backed by `connection`'s `pypi_conda_mapping`
     table (see `write_relations`).
 

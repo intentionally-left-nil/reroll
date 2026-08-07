@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict
 
+from reroll.default_mappers import default_mappers
 from reroll.name_mapping import (
     Candidate,
     CandidateSource,
@@ -26,6 +27,7 @@ __all__ = [
     "UnresolvedCandidates",
     "WheelRecord",
     "aggregator_mapper",
+    "default_mappers",
     "map_name",
     "reroll",
     "static_mapper",

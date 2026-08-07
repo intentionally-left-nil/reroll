@@ -11,7 +11,6 @@ from reroll.grayskull_mapper import grayskull_mapper
 from reroll.name_mapping import (
     Candidate,
     CandidateSource,
-    UnresolvedCandidates,
     aggregator_mapper,
     map_name,
 )
@@ -174,21 +173,14 @@ class TestGrayskullMapperMalformedEntry:
 
 
 class TestGrayskullMapperEndToEnd:
-    def test_hit_followed_by_aggregator_leaves_candidates_unresolved(
+    def test_hit_followed_by_aggregator_resolves_to_the_grayskull_name(
         self, fixture_config: Path
     ) -> None:
-        """`aggregator_mapper` doesn't collapse multiple candidates to one
-        name, so `map_name` raises `UnresolvedCandidates` here.
-        """
         mapper = grayskull_mapper(fixture_config)
 
-        with pytest.raises(UnresolvedCandidates) as exc_info:
-            map_name("annoy", (mapper, aggregator_mapper))
+        result = map_name("annoy", (mapper, aggregator_mapper))
 
-        (candidate,) = exc_info.value.candidates
-        assert candidate.conda_name == "python-annoy"
-        assert candidate.probability == 1.0
-        assert candidate.source is CandidateSource.GRAYSKULL
+        assert result == "python-annoy"
 
     def test_miss_followed_by_aggregator_falls_back_to_the_normalized_name(
         self, fixture_config: Path

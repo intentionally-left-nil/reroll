@@ -484,18 +484,199 @@ class TestStaticMapper:
 # --------------------------------------------------------------------------
 
 
+def _grayskull_candidate(conda_name: str = "python-annoy") -> Candidate:
+    return _candidate(
+        conda_name=conda_name,
+        probability=1.0,
+        source=CandidateSource.GRAYSKULL,
+        mapper="grayskull_config",
+    )
+
+
+def _conda_lock_candidate(conda_name: str, probability: float) -> Candidate:
+    return _candidate(
+        conda_name=conda_name,
+        probability=probability,
+        source=CandidateSource.CONDA_LOCK,
+        mapper="conda_forge_bot_graph",
+    )
+
+
+def _parselmouth_candidate(conda_name: str, probability: float) -> Candidate:
+    return _candidate(
+        conda_name=conda_name,
+        probability=probability,
+        source=CandidateSource.PARSELMOUTH,
+        mapper="parselmouth_relations",
+    )
+
+
 class TestAggregatorMapper:
     def test_empty_candidates_resolves_to_the_normalized_name(self) -> None:
         result = aggregator_mapper(canonicalize_name("tinylib"), ())
 
         assert result == "tinylib"
 
-    def test_non_empty_candidates_pass_through_unchanged(self) -> None:
-        candidates = (_candidate(),)
+    # A grayskull candidate is authoritative.
+
+    def test_grayskull_candidate_alone_is_taken(self) -> None:
+        result = aggregator_mapper(canonicalize_name("annoy"), (_grayskull_candidate(),))
+
+        assert result == "python-annoy"
+
+    def test_grayskull_beats_parselmouth(self) -> None:
+        candidates = (
+            _parselmouth_candidate("annoy", 0.9),
+            _grayskull_candidate("python-annoy"),
+        )
+
+        result = aggregator_mapper(canonicalize_name("annoy"), candidates)
+
+        assert result == "python-annoy"
+
+    def test_grayskull_beats_a_certain_conda_lock_candidate(self) -> None:
+        candidates = (
+            _conda_lock_candidate("annoy-lock", 1.0),
+            _grayskull_candidate("python-annoy"),
+        )
+
+        result = aggregator_mapper(canonicalize_name("annoy"), candidates)
+
+        assert result == "python-annoy"
+
+    # A certain (probability 1.0) conda-lock candidate is a static override.
+
+    def test_certain_conda_lock_candidate_alone_is_taken(self) -> None:
+        candidates = (_conda_lock_candidate("python-tzdata", 1.0),)
+
+        result = aggregator_mapper(canonicalize_name("tzdata"), candidates)
+
+        assert result == "python-tzdata"
+
+    def test_certain_conda_lock_candidate_beats_parselmouth(self) -> None:
+        candidates = (
+            _parselmouth_candidate("tzdata", 0.9),
+            _conda_lock_candidate("python-tzdata", 1.0),
+        )
+
+        result = aggregator_mapper(canonicalize_name("tzdata"), candidates)
+
+        assert result == "python-tzdata"
+
+    # A name proposed by two or more distinct mappers wins the vote.
+
+    def test_two_mappers_agreeing_on_a_name_wins(self) -> None:
+        candidates = (
+            _conda_lock_candidate("x", 0.6),
+            _parselmouth_candidate("x", 0.5),
+        )
+
+        result = aggregator_mapper(canonicalize_name("tinylib"), candidates)
+
+        assert result == "x"
+
+    def test_votes_count_every_candidate_not_just_each_mappers_top_pick(self) -> None:
+        candidates = (
+            _parselmouth_candidate("y", 0.9),
+            _parselmouth_candidate("x", 0.3),
+            _conda_lock_candidate("x", 0.6),
+        )
+
+        result = aggregator_mapper(canonicalize_name("tinylib"), candidates)
+
+        assert result == "x"
+
+    def test_one_mapper_voting_twice_for_a_name_is_still_one_vote(self) -> None:
+        candidates = (
+            _candidate(conda_name="x", probability=0.5, mapper="m1"),
+            _candidate(conda_name="x", probability=0.6, mapper="m1"),
+        )
 
         result = aggregator_mapper(canonicalize_name("tinylib"), candidates)
 
         assert result is candidates
+
+    def test_vote_tie_breaks_first_on_distinct_mapper_count(self) -> None:
+        candidates = (
+            _candidate(conda_name="alpha", probability=0.9, mapper="m1"),
+            _candidate(conda_name="alpha", probability=0.9, mapper="m2"),
+            _candidate(conda_name="beta", probability=0.4, mapper="m1"),
+            _candidate(conda_name="beta", probability=0.4, mapper="m2"),
+            _candidate(conda_name="beta", probability=0.4, mapper="m3"),
+        )
+
+        result = aggregator_mapper(canonicalize_name("tinylib"), candidates)
+
+        assert result == "beta"
+
+    def test_vote_tie_then_breaks_on_summed_probability(self) -> None:
+        candidates = (
+            _candidate(conda_name="alpha", probability=0.5, mapper="m1"),
+            _candidate(conda_name="alpha", probability=0.5, mapper="m2"),
+            _candidate(conda_name="beta", probability=0.6, mapper="m1"),
+            _candidate(conda_name="beta", probability=0.6, mapper="m2"),
+        )
+
+        result = aggregator_mapper(canonicalize_name("tinylib"), candidates)
+
+        assert result == "beta"
+
+    def test_a_full_vote_tie_breaks_on_the_lexicographically_smallest_name(self) -> None:
+        candidates = (
+            _candidate(conda_name="beta", probability=0.5, mapper="m1"),
+            _candidate(conda_name="beta", probability=0.5, mapper="m2"),
+            _candidate(conda_name="alpha", probability=0.5, mapper="m1"),
+            _candidate(conda_name="alpha", probability=0.5, mapper="m2"),
+        )
+
+        result = aggregator_mapper(canonicalize_name("tinylib"), candidates)
+
+        assert result == "alpha"
+
+    def test_disagreeing_mappers_with_no_consensus_defer(self) -> None:
+        candidates = (
+            _conda_lock_candidate("x", 0.6),
+            _parselmouth_candidate("y", 0.5),
+        )
+
+        result = aggregator_mapper(canonicalize_name("tinylib"), candidates)
+
+        assert result is candidates
+
+    # A sole mapper's candidate needs confidence -- or parselmouth's restraint.
+
+    def test_single_non_parselmouth_mapper_at_high_confidence_is_taken(self) -> None:
+        candidates = (_conda_lock_candidate("python-annoy", 0.9),)
+
+        result = aggregator_mapper(canonicalize_name("annoy"), candidates)
+
+        assert result == "python-annoy"
+
+    def test_single_non_parselmouth_mapper_below_the_confidence_threshold_defers(self) -> None:
+        candidates = (_conda_lock_candidate("levenshtein", 0.6),)
+
+        result = aggregator_mapper(canonicalize_name("levenshtein"), candidates)
+
+        assert result is candidates
+
+    def test_parselmouth_as_the_only_mapper_with_exactly_one_candidate_is_taken(self) -> None:
+        candidates = (_parselmouth_candidate("opencv", 0.2),)
+
+        result = aggregator_mapper(canonicalize_name("opencv"), candidates)
+
+        assert result == "opencv"
+
+    def test_parselmouth_as_the_only_mapper_with_multiple_candidates_defers(self) -> None:
+        candidates = (
+            _parselmouth_candidate("opencv", 0.9),
+            _parselmouth_candidate("opencv-python", 0.4),
+        )
+
+        result = aggregator_mapper(canonicalize_name("opencv"), candidates)
+
+        assert result is candidates
+
+    # End to end through `map_name`.
 
     def test_used_end_to_end_falls_back_to_normalized_name(self) -> None:
         assert map_name("Zope_Interface", (aggregator_mapper,)) == ("zope-interface")
@@ -507,8 +688,25 @@ class TestAggregatorMapper:
 
         assert result == "tinylib"
 
-    def test_used_end_to_end_still_raises_when_candidates_are_left_unresolved(self) -> None:
-        contributed = (_candidate(),)
+    def test_used_end_to_end_returns_the_name_the_aggregator_resolves(self) -> None:
+        contributed = (_grayskull_candidate("python-annoy"),)
+
+        def _contributor(
+            name: NormalizedName,
+            candidates: Sequence[Candidate],
+        ) -> Sequence[Candidate]:
+            del name, candidates
+            return contributed
+
+        result = map_name("annoy", (_contributor, aggregator_mapper))
+
+        assert result == "python-annoy"
+
+    def test_used_end_to_end_raises_when_the_aggregator_defers(self) -> None:
+        contributed = (
+            _conda_lock_candidate("x", 0.6),
+            _parselmouth_candidate("y", 0.5),
+        )
 
         def _contributor(
             name: NormalizedName,

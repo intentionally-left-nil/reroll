@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import gzip
 import io
 import json
@@ -40,6 +41,7 @@ from reroll.parselmouth_mapper import (
     version_state,
     write_relations,
 )
+from reroll.parselmouth_mapper.mapper import _mapper_from_connection
 from reroll.parselmouth_mapper.names import _levenshtein_distance
 
 # --------------------------------------------------------------------------
@@ -725,7 +727,7 @@ class TestWriteRelationsVersionLevelAggregation:
 
 
 # --------------------------------------------------------------------------
-# `parselmouth_mapper`
+# `_mapper_from_connection`
 # --------------------------------------------------------------------------
 
 
@@ -765,7 +767,7 @@ class TestParselmouthMapperHit:
     def test_all_surviving_candidates_are_emitted(
         self, built_connection: sqlite3.Connection
     ) -> None:
-        mapper = parselmouth_mapper(built_connection)
+        mapper = _mapper_from_connection(built_connection)
         result = mapper(canonicalize_name("tzdata"), ())
         assert not isinstance(result, str)
         assert {c.conda_name for c in result} == {"python-tzdata", "psycopg"}
@@ -773,20 +775,20 @@ class TestParselmouthMapperHit:
     def test_every_candidate_is_attributed_to_parselmouth(
         self, built_connection: sqlite3.Connection
     ) -> None:
-        mapper = parselmouth_mapper(built_connection)
+        mapper = _mapper_from_connection(built_connection)
         result = mapper(canonicalize_name("tzdata"), ())
         assert not isinstance(result, str)
         assert all(c.source is CandidateSource.PARSELMOUTH for c in result)
 
     def test_hit_never_ends_the_chain(self, built_connection: sqlite3.Connection) -> None:
-        mapper = parselmouth_mapper(built_connection)
+        mapper = _mapper_from_connection(built_connection)
         result = mapper(canonicalize_name("tzdata"), ())
         assert not isinstance(result, str)
 
     def test_hit_appends_after_earlier_candidates(
         self, built_connection: sqlite3.Connection
     ) -> None:
-        mapper = parselmouth_mapper(built_connection)
+        mapper = _mapper_from_connection(built_connection)
         earlier = Candidate(
             conda_name="something-else",
             probability=0.5,
@@ -800,7 +802,7 @@ class TestParselmouthMapperHit:
     def test_self_mapping_scores_higher_than_the_vendored_one(
         self, built_connection: sqlite3.Connection
     ) -> None:
-        mapper = parselmouth_mapper(built_connection)
+        mapper = _mapper_from_connection(built_connection)
         result = mapper(canonicalize_name("tzdata"), ())
         assert not isinstance(result, str)
         by_name = {c.conda_name: c.probability for c in result}
@@ -809,7 +811,7 @@ class TestParselmouthMapperHit:
 
 class TestParselmouthMapperMiss:
     def test_miss_returns_candidates_unchanged(self, built_connection: sqlite3.Connection) -> None:
-        mapper = parselmouth_mapper(built_connection)
+        mapper = _mapper_from_connection(built_connection)
         earlier = (
             Candidate(
                 conda_name="whatever",
@@ -821,7 +823,7 @@ class TestParselmouthMapperMiss:
         assert mapper(canonicalize_name("nonexistent"), earlier) is earlier
 
     def test_miss_on_empty_candidates(self, built_connection: sqlite3.Connection) -> None:
-        mapper = parselmouth_mapper(built_connection)
+        mapper = _mapper_from_connection(built_connection)
         assert mapper(canonicalize_name("nonexistent"), ()) == ()
 
 
@@ -1010,7 +1012,7 @@ class TestOpenParselmouthDatabase:
 
         connection = open_parselmouth_database(db_path)
         try:
-            mapper = parselmouth_mapper(connection)
+            mapper = _mapper_from_connection(connection)
             result = mapper(canonicalize_name("requests"), ())
             assert not isinstance(result, str)
             assert result[0].conda_name == "requests"
@@ -1031,7 +1033,7 @@ class TestOpenParselmouthDatabase:
         try:
             assert sent == ["etag-1"]
             assert db_path.stat().st_mtime_ns == built_at
-            mapper = parselmouth_mapper(connection)
+            mapper = _mapper_from_connection(connection)
             result = mapper(canonicalize_name("requests"), ())
             assert not isinstance(result, str)
             assert result[0].conda_name == "requests"
@@ -1052,7 +1054,7 @@ class TestOpenParselmouthDatabase:
         connection = open_parselmouth_database(db_path)
         try:
             assert sent == ["etag-1"]
-            mapper = parselmouth_mapper(connection)
+            mapper = _mapper_from_connection(connection)
             old = mapper(canonicalize_name("requests"), ())
             new = mapper(canonicalize_name("urllib3"), ())
             assert old == ()
@@ -1072,7 +1074,7 @@ class TestOpenParselmouthDatabase:
         _install_fake_urlopen(monkeypatch, [_FakeHTTPResponse(_gzip_line(_URLLIB3_ROW), "etag-2")])
         new_connection = open_parselmouth_database(db_path)
         try:
-            old_mapper = parselmouth_mapper(old_connection)
+            old_mapper = _mapper_from_connection(old_connection)
             old_result = old_mapper(canonicalize_name("requests"), ())
             assert not isinstance(old_result, str)
             assert old_result[0].conda_name == "requests"
@@ -1097,7 +1099,7 @@ class TestOpenParselmouthDatabase:
         assert set(tmp_path.iterdir()) == {db_path}
         connection = sqlite3.connect(db_path)
         try:
-            mapper = parselmouth_mapper(connection)
+            mapper = _mapper_from_connection(connection)
             result = mapper(canonicalize_name("requests"), ())
             assert not isinstance(result, str)
             assert result[0].conda_name == "requests"
@@ -1119,6 +1121,34 @@ class TestOpenParselmouthDatabase:
             open_parselmouth_database(db_path)
 
         assert list(tmp_path.iterdir()) == []
+
+
+# --------------------------------------------------------------------------
+# `parselmouth_mapper` (zero arguments, default cache path)
+# --------------------------------------------------------------------------
+
+
+class TestDefaultParselmouthMapper:
+    def test_builds_a_mapper_at_the_default_cache_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        _install_fake_urlopen(monkeypatch, [_FakeHTTPResponse(_gzip_line(_REQUESTS_ROW), "etag-1")])
+
+        mapper = parselmouth_mapper()
+        result = mapper(canonicalize_name("requests"), ())
+
+        assert (tmp_path / ".cache" / "reroll" / "parselmouth.sqlite3").exists()
+        assert not isinstance(result, str)
+        assert result[0].conda_name == "requests"
+
+        # `parselmouth_mapper` deliberately never exposes its connection for
+        # closing (see its docstring): collecting it here, rather than
+        # leaving the timing to whenever the garbage collector next runs,
+        # keeps the resulting `ResourceWarning` contained to this test.
+        del mapper
+        with pytest.warns(ResourceWarning, match="unclosed database"):
+            gc.collect()
 
 
 # --------------------------------------------------------------------------

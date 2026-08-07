@@ -96,12 +96,36 @@ def aggregator_mapper(
     name: NormalizedName,
     candidates: Sequence[Candidate],
 ) -> str | Sequence[Candidate]:
-    """A `NameMapper` meant to be placed last in a chain, where a decision
-    finally gets made from whatever `Candidate`s earlier mappers
-    contributed -- weighing `probability` and `source` against each
-    other.
+    """A `NameMapper` meant to be placed last in a chain, deciding a final
+    conda name from the `Candidate`s earlier mappers contributed.
+
+    Decision order: the first grayskull candidate; the first certain
+    (probability 1.0) conda-lock candidate; a name proposed by two or more
+    distinct mappers; a sole mapper's candidate scoring at least 0.9, or
+    parselmouth's only candidate. Anything else defers by returning
+    `candidates` unchanged; empty `candidates` falls back to the normalized
+    PyPI `name`.
     """
-    return candidates if candidates else name
+    if not candidates:
+        return name
+    for candidate in candidates:
+        if candidate.source is CandidateSource.GRAYSKULL:
+            return candidate.conda_name
+    for candidate in candidates:
+        if candidate.source is CandidateSource.CONDA_LOCK and candidate.probability == 1.0:
+            return candidate.conda_name
+    winner = _vote_winner(candidates)
+    if winner is not None:
+        return winner
+    if len({candidate.mapper for candidate in candidates}) == 1:
+        if candidates[0].source is CandidateSource.PARSELMOUTH:
+            if len(candidates) == 1:
+                return candidates[0].conda_name
+        else:
+            best = max(candidates, key=lambda candidate: candidate.probability)
+            if best.probability >= 0.9:
+                return best.conda_name
+    return candidates
 
 
 def static_mapper(table: Mapping[str, str]) -> NameMapper:
@@ -116,3 +140,25 @@ def static_mapper(table: Mapping[str, str]) -> NameMapper:
         return candidates if result is None else result
 
     return _lookup
+
+
+def _vote_winner(candidates: Sequence[Candidate]) -> str | None:
+    """The `conda_name` proposed by at least two distinct mappers, else `None`.
+
+    Ties break on the highest distinct-mapper count, then the highest summed
+    probability, then the lexicographically smallest name.
+    """
+    mappers_by_name: dict[str, set[str]] = {}
+    probability_by_name: dict[str, float] = {}
+    for candidate in candidates:
+        mappers_by_name.setdefault(candidate.conda_name, set()).add(candidate.mapper)
+        probability_by_name[candidate.conda_name] = (
+            probability_by_name.get(candidate.conda_name, 0.0) + candidate.probability
+        )
+    contested = [name for name, mappers in mappers_by_name.items() if len(mappers) >= 2]
+    if not contested:
+        return None
+    return min(
+        contested,
+        key=lambda name: (-len(mappers_by_name[name]), -probability_by_name[name], name),
+    )

@@ -525,16 +525,29 @@ class TestCondaLockMapperCaching:
 
 
 class TestCondaLockMapperEndToEnd:
-    def test_hit_plus_aggregator_still_needs_a_deciding_mapper(
+    def test_unambiguous_hit_plus_aggregator_resolves_to_the_conda_lock_name(
         self, local_tables: tuple[Path, Path, Path]
     ) -> None:
+        # The `annoy` fixture entry is unambiguous (p=0.9), and a sole
+        # non-parselmouth mapper at that confidence resolves outright.
+        mapping, priority, names = local_tables
+        mapper = conda_lock_mapper(
+            mapping_url=mapping, priority_url=priority, name_mapping_url=names
+        )
+        assert map_name("annoy", (mapper, aggregator_mapper)) == "python-annoy"
+
+    def test_ambiguous_hit_plus_aggregator_still_needs_a_deciding_mapper(
+        self, local_tables: tuple[Path, Path, Path]
+    ) -> None:
+        # The `levenshtein` fixture entry is ambiguous (p=0.6), so the
+        # aggregator defers and `map_name` raises.
         mapping, priority, names = local_tables
         mapper = conda_lock_mapper(
             mapping_url=mapping, priority_url=priority, name_mapping_url=names
         )
         with pytest.raises(UnresolvedCandidates) as excinfo:
-            map_name("annoy", (mapper, aggregator_mapper))
-        assert [c.conda_name for c in excinfo.value.candidates] == ["python-annoy"]
+            map_name("levenshtein", (mapper, aggregator_mapper))
+        assert [c.conda_name for c in excinfo.value.candidates] == ["levenshtein"]
 
     def test_miss_plus_aggregator_falls_back_to_normalized_name(
         self, local_tables: tuple[Path, Path, Path]

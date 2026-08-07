@@ -15,7 +15,7 @@ from reroll.filename.enums import AbiKind, Arch, PlatformFamily
 from reroll.filename.platform import supported_archs
 from reroll.filename.python_requirement import PythonRequirement
 from reroll.filename.wheel_config import WheelConfig
-from reroll.name_mapping import NameMappers, UnresolvedCandidates, exact_version, map_name
+from reroll.name_mapping import NameMappers, UnresolvedCandidates, map_name
 
 __all__ = [
     "AbiKind",
@@ -45,10 +45,10 @@ def parse_filename(filename: str, mappers: NameMappers) -> tuple[WheelConfig, ..
         logger.debug("unparseable wheel filename %r: %s", filename, exc)
         return ()
 
-    # The name and version are tag-invariant, so this is resolved once,
+    # The name is tag-invariant, so this is resolved once,
     # before the tag loop below -- not once per `(tag, arch)` combination.
     try:
-        conda_name = map_name(name, exact_version(version), mappers)
+        conda_name = map_name(name, mappers)
     except UnresolvedCandidates as exc:
         logger.warning("unresolved conda name for wheel filename %r: %s", filename, exc)
         return ()

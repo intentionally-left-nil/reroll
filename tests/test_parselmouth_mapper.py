@@ -13,7 +13,6 @@ from email.message import Message
 from pathlib import Path
 
 import pytest
-from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 
 from reroll.name_mapping import Candidate, CandidateSource
@@ -729,7 +728,7 @@ class TestParselmouthMapperHit:
         self, built_connection: sqlite3.Connection
     ) -> None:
         mapper = parselmouth_mapper(built_connection)
-        result = mapper(canonicalize_name("tzdata"), SpecifierSet(), ())
+        result = mapper(canonicalize_name("tzdata"), ())
         assert not isinstance(result, str)
         assert {c.conda_name for c in result} == {"python-tzdata", "psycopg"}
 
@@ -737,13 +736,13 @@ class TestParselmouthMapperHit:
         self, built_connection: sqlite3.Connection
     ) -> None:
         mapper = parselmouth_mapper(built_connection)
-        result = mapper(canonicalize_name("tzdata"), SpecifierSet(), ())
+        result = mapper(canonicalize_name("tzdata"), ())
         assert not isinstance(result, str)
         assert all(c.source is CandidateSource.PARSELMOUTH for c in result)
 
     def test_hit_never_ends_the_chain(self, built_connection: sqlite3.Connection) -> None:
         mapper = parselmouth_mapper(built_connection)
-        result = mapper(canonicalize_name("tzdata"), SpecifierSet(), ())
+        result = mapper(canonicalize_name("tzdata"), ())
         assert not isinstance(result, str)
 
     def test_hit_appends_after_earlier_candidates(
@@ -756,7 +755,7 @@ class TestParselmouthMapperHit:
             source=CandidateSource.OTHER,
             mapper="test",
         )
-        result = mapper(canonicalize_name("tzdata"), SpecifierSet(), (earlier,))
+        result = mapper(canonicalize_name("tzdata"), (earlier,))
         assert not isinstance(result, str)
         assert result[0] == earlier
 
@@ -764,7 +763,7 @@ class TestParselmouthMapperHit:
         self, built_connection: sqlite3.Connection
     ) -> None:
         mapper = parselmouth_mapper(built_connection)
-        result = mapper(canonicalize_name("tzdata"), SpecifierSet(), ())
+        result = mapper(canonicalize_name("tzdata"), ())
         assert not isinstance(result, str)
         by_name = {c.conda_name: c.probability for c in result}
         assert by_name["python-tzdata"] > by_name["psycopg"]
@@ -781,65 +780,11 @@ class TestParselmouthMapperMiss:
                 mapper="test",
             ),
         )
-        assert mapper(canonicalize_name("nonexistent"), SpecifierSet(), earlier) is earlier
+        assert mapper(canonicalize_name("nonexistent"), earlier) is earlier
 
     def test_miss_on_empty_candidates(self, built_connection: sqlite3.Connection) -> None:
         mapper = parselmouth_mapper(built_connection)
-        assert mapper(canonicalize_name("nonexistent"), SpecifierSet(), ()) == ()
-
-
-class TestParselmouthMapperIgnoresSpecifier:
-    """Version pinning is not implemented yet: every candidate is scored
-    from its pair's whole history, regardless of `specifier`.
-    """
-
-    def test_an_exact_pin_gives_the_same_result_as_unpinned(
-        self, connection: sqlite3.Connection
-    ) -> None:
-        write_relations(
-            connection,
-            [
-                _row(
-                    "boto3-stubs",
-                    "boto3-stubs-1.34.0-pyhd8ed1ab_0.conda",
-                    "boto3-stubs",
-                    "1.34.0",
-                ),
-                _row(
-                    "boto3-stubs",
-                    "boto3-stubs-1.34.1-pyhd8ed1ab_0.conda",
-                    "botocore-stubs",
-                    "1.34.1",
-                ),
-            ],
-        )
-        mapper = parselmouth_mapper(connection)
-
-        unpinned = mapper(canonicalize_name("botocore-stubs"), SpecifierSet(), ())
-        pinned = mapper(canonicalize_name("botocore-stubs"), SpecifierSet("==1.34.1"), ())
-        assert not isinstance(unpinned, str)
-        assert not isinstance(pinned, str)
-        assert {c.probability for c in unpinned} == {c.probability for c in pinned}
-
-    def test_a_pin_with_no_evidence_gives_the_same_result_as_unpinned(
-        self, built_connection: sqlite3.Connection
-    ) -> None:
-        mapper = parselmouth_mapper(built_connection)
-        unpinned = mapper(canonicalize_name("tzdata"), SpecifierSet(), ())
-        pinned = mapper(canonicalize_name("tzdata"), SpecifierSet("==9999"), ())
-        assert not isinstance(unpinned, str)
-        assert not isinstance(pinned, str)
-        assert {c.probability for c in unpinned} == {c.probability for c in pinned}
-
-    def test_a_loose_specifier_gives_the_same_result_as_unpinned(
-        self, built_connection: sqlite3.Connection
-    ) -> None:
-        mapper = parselmouth_mapper(built_connection)
-        loose = mapper(canonicalize_name("tzdata"), SpecifierSet(">=1900"), ())
-        unpinned = mapper(canonicalize_name("tzdata"), SpecifierSet(), ())
-        assert not isinstance(loose, str)
-        assert not isinstance(unpinned, str)
-        assert {c.probability for c in loose} == {c.probability for c in unpinned}
+        assert mapper(canonicalize_name("nonexistent"), ()) == ()
 
 
 # --------------------------------------------------------------------------
@@ -1028,7 +973,7 @@ class TestOpenParselmouthDatabase:
         connection = open_parselmouth_database(db_path)
         try:
             mapper = parselmouth_mapper(connection)
-            result = mapper(canonicalize_name("requests"), SpecifierSet(), ())
+            result = mapper(canonicalize_name("requests"), ())
             assert not isinstance(result, str)
             assert result[0].conda_name == "requests"
         finally:
@@ -1049,7 +994,7 @@ class TestOpenParselmouthDatabase:
             assert sent == ["etag-1"]
             assert db_path.stat().st_mtime_ns == built_at
             mapper = parselmouth_mapper(connection)
-            result = mapper(canonicalize_name("requests"), SpecifierSet(), ())
+            result = mapper(canonicalize_name("requests"), ())
             assert not isinstance(result, str)
             assert result[0].conda_name == "requests"
         finally:
@@ -1070,8 +1015,8 @@ class TestOpenParselmouthDatabase:
         try:
             assert sent == ["etag-1"]
             mapper = parselmouth_mapper(connection)
-            old = mapper(canonicalize_name("requests"), SpecifierSet(), ())
-            new = mapper(canonicalize_name("urllib3"), SpecifierSet(), ())
+            old = mapper(canonicalize_name("requests"), ())
+            new = mapper(canonicalize_name("urllib3"), ())
             assert old == ()
             assert not isinstance(new, str)
             assert new[0].conda_name == "urllib3"
@@ -1090,7 +1035,7 @@ class TestOpenParselmouthDatabase:
         new_connection = open_parselmouth_database(db_path)
         try:
             old_mapper = parselmouth_mapper(old_connection)
-            old_result = old_mapper(canonicalize_name("requests"), SpecifierSet(), ())
+            old_result = old_mapper(canonicalize_name("requests"), ())
             assert not isinstance(old_result, str)
             assert old_result[0].conda_name == "requests"
         finally:
@@ -1115,7 +1060,7 @@ class TestOpenParselmouthDatabase:
         connection = sqlite3.connect(db_path)
         try:
             mapper = parselmouth_mapper(connection)
-            result = mapper(canonicalize_name("requests"), SpecifierSet(), ())
+            result = mapper(canonicalize_name("requests"), ())
             assert not isinstance(result, str)
             assert result[0].conda_name == "requests"
         finally:

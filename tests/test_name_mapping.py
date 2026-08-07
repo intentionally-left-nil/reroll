@@ -7,9 +7,7 @@ from collections.abc import Sequence
 from typing import cast
 
 import pytest
-from packaging.specifiers import SpecifierSet
 from packaging.utils import NormalizedName, canonicalize_name
-from packaging.version import Version
 from pydantic import ValidationError
 
 from reroll.name_mapping import (
@@ -19,36 +17,9 @@ from reroll.name_mapping import (
     NameMappers,
     UnresolvedCandidates,
     aggregator_mapper,
-    exact_version,
     map_name,
     static_mapper,
 )
-
-# --------------------------------------------------------------------------
-# `exact_version`
-# --------------------------------------------------------------------------
-
-
-class TestExactVersion:
-    @pytest.mark.parametrize(
-        "raw",
-        [
-            "1.2.3",
-            "1!2.0",
-            "1.2.3+abc.1",
-            "1.2.3.dev0",
-            "1.2.3.post1",
-            "1.2.3rc1",
-        ],
-    )
-    def test_round_trips(self, raw: str) -> None:
-        version = Version(raw)
-
-        specifier = exact_version(version)
-
-        assert specifier == SpecifierSet(f"=={version}")
-        assert specifier.contains(version)
-
 
 # --------------------------------------------------------------------------
 # `CandidateSource`
@@ -144,10 +115,9 @@ class TestCandidate:
 
 def _function_mapper(
     name: NormalizedName,
-    specifier: SpecifierSet,
     candidates: Sequence[Candidate],
 ) -> str | Sequence[Candidate]:
-    del specifier, candidates
+    del candidates
     return f"conda-{name}"
 
 
@@ -163,10 +133,9 @@ class _StatefulMapper:
     def __call__(
         self,
         name: NormalizedName,
-        specifier: SpecifierSet,
         candidates: Sequence[Candidate],
     ) -> str | Sequence[Candidate]:
-        del name, specifier, candidates
+        del name, candidates
         self.hits += 1
         return self.result
 
@@ -175,58 +144,55 @@ class _BoundMethodOwner:
     def lookup(
         self,
         name: NormalizedName,
-        specifier: SpecifierSet,
         candidates: Sequence[Candidate],
     ) -> str | Sequence[Candidate]:
-        del specifier, candidates
+        del candidates
         return f"bound-{name}"
 
 
 class TestCallableShapes:
     def test_function(self) -> None:
-        assert map_name("Requests", SpecifierSet(""), (_function_mapper,)) == "conda-requests"
+        assert map_name("Requests", (_function_mapper,)) == "conda-requests"
 
     def test_lambda(self) -> None:
-        mapper: NameMapper = lambda name, specifier, candidates: f"lambda-{name}"  # noqa: E731
-        assert map_name("Requests", SpecifierSet(""), (mapper,)) == "lambda-requests"
+        mapper: NameMapper = lambda name, candidates: f"lambda-{name}"  # noqa: E731
+        assert map_name("Requests", (mapper,)) == "lambda-requests"
 
     def test_closure(self) -> None:
         def make_mapper(prefix: str) -> NameMapper:
             def _mapper(
                 name: NormalizedName,
-                specifier: SpecifierSet,
                 candidates: Sequence[Candidate],
             ) -> str | Sequence[Candidate]:
-                del specifier, candidates
+                del candidates
                 return f"{prefix}-{name}"
 
             return _mapper
 
         mapper = make_mapper("closure")
-        assert map_name("Requests", SpecifierSet(""), (mapper,)) == "closure-requests"
+        assert map_name("Requests", (mapper,)) == "closure-requests"
 
     def test_functools_partial(self) -> None:
         def _mapper(
             prefix: str,
             name: NormalizedName,
-            specifier: SpecifierSet,
             candidates: Sequence[Candidate],
         ) -> str | Sequence[Candidate]:
-            del specifier, candidates
+            del candidates
             return f"{prefix}-{name}"
 
         mapper = functools.partial(_mapper, "partial")
-        assert map_name("Requests", SpecifierSet(""), (mapper,)) == "partial-requests"
+        assert map_name("Requests", (mapper,)) == "partial-requests"
 
     def test_bound_method(self) -> None:
         owner = _BoundMethodOwner()
-        assert map_name("Requests", SpecifierSet(""), (owner.lookup,)) == "bound-requests"
+        assert map_name("Requests", (owner.lookup,)) == "bound-requests"
 
     def test_stateful_instance_counts_hits_and_is_reused(self) -> None:
         mapper = _StatefulMapper("stateful-result")
 
-        first = map_name("Requests", SpecifierSet(""), (mapper,))
-        second = map_name("Other", SpecifierSet(""), (mapper,))
+        first = map_name("Requests", (mapper,))
+        second = map_name("Other", (mapper,))
 
         assert first == "stateful-result"
         assert second == "stateful-result"
@@ -234,13 +200,13 @@ class TestCallableShapes:
 
 
 def _different_parameter_names(
-    pypi_name: str, spec: SpecifierSet, seen: Sequence[Candidate]
+    pypi_name: str, seen: Sequence[Candidate]
 ) -> str | Sequence[Candidate]:
     """Used only for the static typecheck assertion below: a `NameMapper`
     annotates its parameters positionally, so an implementation naming them
     anything else must still satisfy the alias.
     """
-    del pypi_name, spec, seen
+    del pypi_name, seen
     return "tinylib"
 
 
@@ -249,7 +215,7 @@ _typecheck_assignment: NameMapper = _different_parameter_names
 
 class TestArbitraryParameterNames:
     def test_still_callable_as_a_mapper(self) -> None:
-        assert map_name("tinylib", SpecifierSet(""), (_different_parameter_names,)) == "tinylib"
+        assert map_name("tinylib", (_different_parameter_names,)) == "tinylib"
 
 
 # --------------------------------------------------------------------------
@@ -265,15 +231,14 @@ class _Spy:
 
     def __init__(self, result: str | None = None) -> None:
         self.result = result
-        self.calls: list[tuple[NormalizedName, SpecifierSet, Sequence[Candidate]]] = []
+        self.calls: list[tuple[NormalizedName, Sequence[Candidate]]] = []
 
     def __call__(
         self,
         name: NormalizedName,
-        specifier: SpecifierSet,
         candidates: Sequence[Candidate],
     ) -> str | Sequence[Candidate]:
-        self.calls.append((name, specifier, candidates))
+        self.calls.append((name, candidates))
         return candidates if self.result is None else self.result
 
 
@@ -291,7 +256,7 @@ class TestChainResolution:
         first = _Spy(result=None)
         second = _Spy(result="second-result")
 
-        result = map_name("tinylib", SpecifierSet(""), (first, second))
+        result = map_name("tinylib", (first, second))
 
         assert result == "second-result"
         assert len(first.calls) == 1
@@ -301,7 +266,7 @@ class TestChainResolution:
         first = _Spy(result="first-result")
         second = _Spy(result="second-result")
 
-        result = map_name("tinylib", SpecifierSet(""), (first, second))
+        result = map_name("tinylib", (first, second))
 
         assert result == "first-result"
         assert len(first.calls) == 1
@@ -310,9 +275,9 @@ class TestChainResolution:
     def test_first_mapper_receives_an_empty_candidate_sequence(self) -> None:
         spy = _Spy(result="whatever")
 
-        map_name("tinylib", SpecifierSet(""), (spy,))
+        map_name("tinylib", (spy,))
 
-        ((_name, _specifier, candidates),) = spy.calls
+        ((_name, candidates),) = spy.calls
         assert candidates == ()
 
     def test_candidates_flow_unchanged_from_one_mapper_to_the_next(self) -> None:
@@ -322,53 +287,25 @@ class TestChainResolution:
             def __call__(
                 self,
                 name: NormalizedName,
-                specifier: SpecifierSet,
                 candidates: Sequence[Candidate],
             ) -> Sequence[Candidate]:
-                del name, specifier, candidates
+                del name, candidates
                 return contributed
 
         second = _Spy(result="resolved")
 
-        map_name("tinylib", SpecifierSet(""), (_Contributor(), second))
+        map_name("tinylib", (_Contributor(), second))
 
-        ((_name, _specifier, received),) = second.calls
+        ((_name, received),) = second.calls
         assert received is contributed
 
     def test_mapper_receives_canonicalized_name(self) -> None:
         spy = _Spy(result="whatever")
 
-        map_name("Zope_Interface", SpecifierSet(""), (spy,))
+        map_name("Zope_Interface", (spy,))
 
-        ((name, _specifier, _candidates),) = spy.calls
+        ((name, _candidates),) = spy.calls
         assert name == "zope-interface"
-
-    def test_mapper_receives_the_same_specifier_object(self) -> None:
-        spy = _Spy(result="whatever")
-        specifier = SpecifierSet(">=1.0,<2.0")
-
-        map_name("tinylib", specifier, (spy,))
-
-        ((_name, received, _candidates),) = spy.calls
-        assert received is specifier
-
-    def test_empty_specifier_set_is_accepted(self) -> None:
-        spy = _Spy(result="whatever")
-        specifier = SpecifierSet("")
-
-        map_name("tinylib", specifier, (spy,))
-
-        ((_name, received, _candidates),) = spy.calls
-        assert received is specifier
-
-    def test_multi_clause_specifier_is_accepted(self) -> None:
-        spy = _Spy(result="whatever")
-        specifier = SpecifierSet(">=1.0,<2.0,!=1.5")
-
-        map_name("tinylib", specifier, (spy,))
-
-        ((_name, received, _candidates),) = spy.calls
-        assert received is specifier
 
 
 # --------------------------------------------------------------------------
@@ -381,7 +318,7 @@ class TestNonEmptyMapperChain:
         empty: NameMappers = cast(NameMappers, ())
 
         with pytest.raises(ValueError, match="at least one mapper"):
-            map_name("tinylib", SpecifierSet(""), empty)
+            map_name("tinylib", empty)
 
     def test_empty_chain_never_reaches_unresolved_candidates(self) -> None:
         """The empty-chain rejection is a `ValueError`, distinct from --
@@ -391,7 +328,7 @@ class TestNonEmptyMapperChain:
         empty: NameMappers = cast(NameMappers, ())
 
         try:
-            map_name("tinylib", SpecifierSet(""), empty)
+            map_name("tinylib", empty)
         except UnresolvedCandidates:
             pytest.fail("expected ValueError, not UnresolvedCandidates")
         except ValueError:
@@ -408,7 +345,7 @@ class TestUnresolvedCandidates:
         mappers = (_Spy(result=None), _Spy(result=None))
 
         with pytest.raises(UnresolvedCandidates) as exc_info:
-            map_name("Zope_Interface", SpecifierSet(""), mappers)
+            map_name("Zope_Interface", mappers)
 
         assert exc_info.value.name == "zope-interface"
         assert exc_info.value.candidates == ()
@@ -418,14 +355,13 @@ class TestUnresolvedCandidates:
 
         def _contributor(
             name: NormalizedName,
-            specifier: SpecifierSet,
             candidates: Sequence[Candidate],
         ) -> Sequence[Candidate]:
-            del name, specifier, candidates
+            del name, candidates
             return contributed
 
         with pytest.raises(UnresolvedCandidates) as exc_info:
-            map_name("tinylib", SpecifierSet(""), (_contributor,))
+            map_name("tinylib", (_contributor,))
 
         assert exc_info.value.candidates == contributed
 
@@ -437,31 +373,28 @@ class TestUnresolvedCandidates:
 
         def _contributor(
             name: NormalizedName,
-            specifier: SpecifierSet,
             candidates: Sequence[Candidate],
         ) -> Sequence[Candidate]:
-            del name, specifier, candidates
+            del name, candidates
             return duplicates
 
         with pytest.raises(UnresolvedCandidates) as exc_info:
-            map_name("tinylib", SpecifierSet(""), (_contributor,))
+            map_name("tinylib", (_contributor,))
 
         assert len(exc_info.value.candidates) == 2
         assert exc_info.value.candidates[0].source is CandidateSource.PARSELMOUTH
         assert exc_info.value.candidates[1].source is CandidateSource.GRAYSKULL
 
     def test_carries_its_attributes_directly(self) -> None:
-        specifier = SpecifierSet("")
         candidates = (_candidate(),)
 
-        exc = UnresolvedCandidates("opencv", specifier, candidates)
+        exc = UnresolvedCandidates("opencv", candidates)
 
         assert exc.name == "opencv"
-        assert exc.specifier is specifier
         assert exc.candidates == candidates
 
     def test_defaults_to_no_candidates(self) -> None:
-        exc = UnresolvedCandidates("opencv", SpecifierSet(""))
+        exc = UnresolvedCandidates("opencv")
 
         assert exc.candidates == ()
 
@@ -475,28 +408,26 @@ class TestExceptionPropagation:
     def test_unrelated_mapper_exception_propagates(self) -> None:
         def _buggy(
             name: NormalizedName,
-            specifier: SpecifierSet,
             candidates: Sequence[Candidate],
         ) -> str | Sequence[Candidate]:
-            del name, specifier, candidates
+            del name, candidates
             raise KeyError("boom")
 
         with pytest.raises(KeyError):
-            map_name("tinylib", SpecifierSet(""), (_buggy,))
+            map_name("tinylib", (_buggy,))
 
     def test_exception_aborts_the_chain(self) -> None:
         def _buggy(
             name: NormalizedName,
-            specifier: SpecifierSet,
             candidates: Sequence[Candidate],
         ) -> str | Sequence[Candidate]:
-            del name, specifier, candidates
+            del name, candidates
             raise KeyError("boom")
 
         spy = _Spy(result="never-reached")
 
         with pytest.raises(KeyError):
-            map_name("tinylib", SpecifierSet(""), (_buggy, spy))
+            map_name("tinylib", (_buggy, spy))
 
         assert len(spy.calls) == 0
 
@@ -510,26 +441,20 @@ class TestStaticMapper:
     def test_hit(self) -> None:
         mapper = static_mapper({"tzdata": "python-tzdata"})
 
-        assert mapper(canonicalize_name("tzdata"), SpecifierSet(""), ()) == "python-tzdata"
+        assert mapper(canonicalize_name("tzdata"), ()) == "python-tzdata"
 
     def test_miss_returns_the_input_candidates_object_unchanged(self) -> None:
         mapper = static_mapper({"tzdata": "python-tzdata"})
         candidates = (_candidate(),)
 
-        result = mapper(canonicalize_name("requests"), SpecifierSet(""), candidates)
+        result = mapper(canonicalize_name("requests"), candidates)
 
         assert result is candidates
 
     def test_non_canonical_keys_are_normalized_at_construction(self) -> None:
         mapper = static_mapper({"Zope-Interface": "zope.interface"})
 
-        assert mapper(canonicalize_name("zope-interface"), SpecifierSet(""), ()) == "zope.interface"
-
-    def test_specifier_is_ignored(self) -> None:
-        mapper = static_mapper({"tzdata": "python-tzdata"})
-
-        assert mapper(canonicalize_name("tzdata"), SpecifierSet("==1.0"), ()) == "python-tzdata"
-        assert mapper(canonicalize_name("tzdata"), SpecifierSet(">=2.0"), ()) == "python-tzdata"
+        assert mapper(canonicalize_name("zope-interface"), ()) == "zope.interface"
 
     def test_value_is_not_validated_against_cep_26(self) -> None:
         """Mirrors `Candidate.conda_name`: validation is deferred entirely
@@ -538,18 +463,18 @@ class TestStaticMapper:
         """
         mapper = static_mapper({"tzdata": "Bad--Name"})
 
-        assert mapper(canonicalize_name("tzdata"), SpecifierSet(""), ()) == "Bad--Name"
+        assert mapper(canonicalize_name("tzdata"), ()) == "Bad--Name"
 
     def test_used_end_to_end_through_map_name_on_a_hit(self) -> None:
         mapper = static_mapper({"tzdata": "python-tzdata"})
 
-        assert map_name("tzdata", SpecifierSet(""), (mapper,)) == "python-tzdata"
+        assert map_name("tzdata", (mapper,)) == "python-tzdata"
 
     def test_used_end_to_end_through_map_name_raises_on_a_miss(self) -> None:
         mapper = static_mapper({"tzdata": "python-tzdata"})
 
         with pytest.raises(UnresolvedCandidates) as exc_info:
-            map_name("requests", SpecifierSet(""), (mapper,))
+            map_name("requests", (mapper,))
 
         assert exc_info.value.candidates == ()
 
@@ -561,32 +486,24 @@ class TestStaticMapper:
 
 class TestAggregatorMapper:
     def test_empty_candidates_resolves_to_the_normalized_name(self) -> None:
-        result = aggregator_mapper(canonicalize_name("tinylib"), SpecifierSet(""), ())
+        result = aggregator_mapper(canonicalize_name("tinylib"), ())
 
         assert result == "tinylib"
 
     def test_non_empty_candidates_pass_through_unchanged(self) -> None:
         candidates = (_candidate(),)
 
-        result = aggregator_mapper(canonicalize_name("tinylib"), SpecifierSet(""), candidates)
+        result = aggregator_mapper(canonicalize_name("tinylib"), candidates)
 
         assert result is candidates
 
-    def test_specifier_is_ignored(self) -> None:
-        name = canonicalize_name("tinylib")
-
-        assert aggregator_mapper(name, SpecifierSet("==1.0"), ()) == "tinylib"
-        assert aggregator_mapper(name, SpecifierSet(">=2.0"), ()) == "tinylib"
-
     def test_used_end_to_end_falls_back_to_normalized_name(self) -> None:
-        assert map_name("Zope_Interface", SpecifierSet(""), (aggregator_mapper,)) == (
-            "zope-interface"
-        )
+        assert map_name("Zope_Interface", (aggregator_mapper,)) == ("zope-interface")
 
     def test_used_end_to_end_after_a_no_opinion_mapper(self) -> None:
         no_opinion = _Spy(result=None)
 
-        result = map_name("tinylib", SpecifierSet(""), (no_opinion, aggregator_mapper))
+        result = map_name("tinylib", (no_opinion, aggregator_mapper))
 
         assert result == "tinylib"
 
@@ -595,13 +512,12 @@ class TestAggregatorMapper:
 
         def _contributor(
             name: NormalizedName,
-            specifier: SpecifierSet,
             candidates: Sequence[Candidate],
         ) -> Sequence[Candidate]:
-            del name, specifier, candidates
+            del name, candidates
             return contributed
 
         with pytest.raises(UnresolvedCandidates) as exc_info:
-            map_name("tinylib", SpecifierSet(""), (_contributor, aggregator_mapper))
+            map_name("tinylib", (_contributor, aggregator_mapper))
 
         assert exc_info.value.candidates == contributed

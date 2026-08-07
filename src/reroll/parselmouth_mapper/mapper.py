@@ -5,7 +5,6 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Sequence
 
-from packaging.specifiers import SpecifierSet
 from packaging.utils import NormalizedName
 
 from reroll.name_mapping import Candidate, CandidateSource, NameMapper
@@ -23,18 +22,12 @@ def parselmouth_mapper(connection: sqlite3.Connection) -> NameMapper:
     most of parselmouth's data is correct, so a low-confidence row is still
     worth a low `probability`, not a rejection -- the aggregator downstream
     decides what to do with it. A miss returns `candidates` unchanged.
-
-    `specifier` is currently ignored: every candidate is scored from its
-    pair's whole version history, regardless of which version a caller
-    asked about.
     """
 
     def _lookup(
         name: NormalizedName,
-        specifier: SpecifierSet,
         candidates: Sequence[Candidate],
     ) -> Sequence[Candidate]:
-        del specifier
         rows = connection.execute(
             "SELECT conda_name, name_axis, n_versions_agree, n_versions_no_signal, "
             "n_versions_disagree, vendored_only, claimed_by_other "

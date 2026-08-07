@@ -14,7 +14,6 @@ from reroll.name_mapping import (
     NameMappers,
     UnresolvedCandidates,
     aggregator_mapper,
-    exact_version,
     map_name,
     static_mapper,
 )
@@ -27,7 +26,6 @@ __all__ = [
     "UnresolvedCandidates",
     "WheelRecord",
     "aggregator_mapper",
-    "exact_version",
     "map_name",
     "reroll",
     "static_mapper",

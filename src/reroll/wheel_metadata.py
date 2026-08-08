@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from typing import Annotated
 
 from packaging.licenses import canonicalize_license_expression
 from packaging.metadata import parse_email
-from packaging.requirements import Requirement
-from packaging.specifiers import SpecifierSet
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import canonicalize_name
 from pydantic import AfterValidator, BaseModel, ConfigDict, field_validator
 
@@ -59,7 +60,11 @@ class WheelMetadata(BaseModel):
     def _validate_requires_python(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        return str(SpecifierSet(value))
+        try:
+            specifiers = SpecifierSet(value)
+        except InvalidSpecifier:
+            specifiers = SpecifierSet(_insert_missing_specifier_separators(value))
+        return str(specifiers)
 
     @field_validator("requires_dist")
     @classmethod
@@ -69,7 +74,7 @@ class WheelMetadata(BaseModel):
         `sys.platform`-marker style to modern syntax, so `str(Requirement(...))`
         is enough -- no separate old/new-style handling is needed.
         """
-        return tuple(str(Requirement(item)) for item in value)
+        return tuple(str(_parse_requirement(item)) for item in value)
 
 
 def parse_metadata(metadata: str) -> WheelMetadata:
@@ -94,3 +99,64 @@ def parse_metadata(metadata: str) -> WheelMetadata:
             "provides_extra": tuple(raw.get("provides_extra") or ()),
         }
     )
+
+
+_MISSING_SPECIFIER_SEPARATOR_RE = re.compile(r"(?<=[0-9*])(?=!=|===|==|>=|<=|~=|<|>)")
+
+
+def _insert_missing_specifier_separators(value: str) -> str:
+    """Repairs a `requires_python` value with no separator between adjacent
+    clauses -- e.g. `!=3.4.*!=3.5.*` instead of `!=3.4.*, !=3.5.*`, seen in
+    real, published wheel metadata -- by inserting a comma wherever one
+    clause's version segment is immediately followed by another clause's
+    operator.
+    """
+    return _MISSING_SPECIFIER_SEPARATOR_RE.sub(",", value)
+
+
+_LEGACY_NAME_PREFIX_RE = re.compile(r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*(?:\s*\[[^\]]*\])?)\s*")
+
+
+def _split_legacy_parenthesized_version(value: str) -> tuple[str, str, str] | None:
+    """Splits `value` into `(name_and_extras, specifier, rest)` if it starts
+    with `<name>[extras] (<specifier>)<rest>` -- PEP 345's optional
+    parenthesized-version shape. Paren depth is tracked (not just matched to
+    the first `)`) so a stray nested paren in a malformed `specifier` can't
+    be mistaken for the group's closing paren. Returns `None` if `value`
+    isn't shaped like this at all, or its parens never balance back to 0.
+    """
+    match = _LEGACY_NAME_PREFIX_RE.match(value)
+    if match is None:
+        return None
+    rest = value[match.end() :]
+    if not rest.startswith("("):
+        return None
+    depth = 1
+    for index in range(1, len(rest)):
+        if rest[index] == "(":
+            depth += 1
+        elif rest[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return match["name"], rest[1:index], rest[index + 1 :]
+    return None
+
+
+def _parse_requirement(value: str) -> Requirement:
+    """Parses a `requires_dist` entry, repairing one known-bad shape: some
+    old wheel builders quote the version inside a PEP 345 parenthesized
+    specifier -- e.g. `python-version (>='3.10')`, seen in real, published
+    wheel metadata -- which PEP 440 doesn't allow, since version specifiers
+    never contain quote characters. Only the parenthesized portion is
+    touched, so a trailing marker's own quoted string literals (and its own
+    grouping parens, if any) survive untouched.
+    """
+    try:
+        return Requirement(value)
+    except InvalidRequirement:
+        split = _split_legacy_parenthesized_version(value)
+        if split is None:
+            raise
+        name_and_extras, specifier, rest = split
+        specifier = specifier.replace("'", "").replace('"', "")
+        return Requirement(f"{name_and_extras}({specifier}){rest}")

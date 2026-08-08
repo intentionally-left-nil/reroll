@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import pytest
+from packaging.requirements import InvalidRequirement
+from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 from pydantic import ValidationError
 
-from reroll.wheel_metadata import WheelMetadata, parse_metadata
+from reroll.wheel_metadata import WheelMetadata, _parse_requirement, parse_metadata
 
 _MINIMAL = "Metadata-Version: 2.1\nName: tinylib\nVersion: 1.2.3\n\n"
 
@@ -218,6 +220,58 @@ class TestRequiresPython:
                 )
             )
 
+    def test_missing_separator_between_exclusion_clauses_is_repaired(self) -> None:
+        """Real, published wheel metadata has been seen with no separator
+        between adjacent exclusion clauses -- `!=3.4.*!=3.5.*` instead of
+        `!=3.4.*, !=3.5.*`.
+        """
+        metadata = parse_metadata(
+            _text(
+                "Metadata-Version: 2.1",
+                "Name: tinylib",
+                "Version: 1.0",
+                "Requires-Python: >=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*!=3.5.*",
+            )
+        )
+
+        assert metadata.requires_python is not None
+        specifiers = SpecifierSet(metadata.requires_python)
+        assert Version("2.6") not in specifiers
+        assert Version("3.0.1") not in specifiers
+        assert Version("3.4.1") not in specifiers
+        assert Version("3.5.1") not in specifiers
+        assert Version("3.6.0") in specifiers
+
+    def test_missing_separator_between_other_clauses_is_repaired(self) -> None:
+        metadata = parse_metadata(
+            _text(
+                "Metadata-Version: 2.1",
+                "Name: tinylib",
+                "Version: 1.0",
+                "Requires-Python: >=3.6<4.0",
+            )
+        )
+
+        assert metadata.requires_python is not None
+        specifiers = SpecifierSet(metadata.requires_python)
+        assert Version("3.5") not in specifiers
+        assert Version("3.7") in specifiers
+        assert Version("4.0") not in specifiers
+
+    def test_unrepairable_invalid_specifier_is_still_rejected(self) -> None:
+        """The missing-separator repair must not silently accept garbage
+        that merely happens to contain digits and operators.
+        """
+        with pytest.raises(ValidationError):
+            parse_metadata(
+                _text(
+                    "Metadata-Version: 2.1",
+                    "Name: tinylib",
+                    "Version: 1.0",
+                    "Requires-Python: >=1.0 and !!invalid!!",
+                )
+            )
+
 
 # --------------------------------------------------------------------------
 # `requires_dist`
@@ -284,6 +338,287 @@ class TestRequiresDist:
                     "Requires-Dist: café",
                 )
             )
+
+    def test_quoted_legacy_parenthesized_version_is_repaired(self) -> None:
+        """Some old wheel builders quote the version inside a PEP 345
+        parenthesized specifier -- e.g. `python-version (>='3.10')`, seen in
+        real, published wheel metadata -- which PEP 440 doesn't allow:
+        version specifiers never contain quote characters.
+        """
+        metadata = parse_metadata(
+            _text(
+                "Metadata-Version: 1.2",
+                "Name: tinylib",
+                "Version: 1.0",
+                "Requires-Dist: python-version (>='3.10')",
+            )
+        )
+
+        assert metadata.requires_dist == ("python-version>=3.10",)
+
+    def test_quoted_legacy_parenthesized_version_with_extras_is_repaired(self) -> None:
+        metadata = parse_metadata(
+            _text(
+                "Metadata-Version: 1.2",
+                "Name: tinylib",
+                "Version: 1.0",
+                "Requires-Dist: foo[bar] (>='1.0')",
+            )
+        )
+
+        assert metadata.requires_dist == ("foo[bar]>=1.0",)
+
+    def test_quoted_legacy_parenthesized_version_keeps_marker_quotes(self) -> None:
+        """The repair only strips quotes from the parenthesized version --
+        a trailing environment marker's own quoted string literals (required
+        by PEP 508 grammar) must survive untouched.
+        """
+        metadata = parse_metadata(
+            _text(
+                "Metadata-Version: 1.2",
+                "Name: tinylib",
+                "Version: 1.0",
+                "Requires-Dist: foo (>='1.0'); python_version >= '3.10'",
+            )
+        )
+
+        assert metadata.requires_dist == ('foo>=1.0; python_version >= "3.10"',)
+
+    def test_quoted_legacy_parenthesized_version_with_double_quotes_is_repaired(self) -> None:
+        metadata = parse_metadata(
+            _text(
+                "Metadata-Version: 1.2",
+                "Name: tinylib",
+                "Version: 1.0",
+                'Requires-Dist: foo (>="1.0")',
+            )
+        )
+
+        assert metadata.requires_dist == ("foo>=1.0",)
+
+    def test_marker_with_its_own_grouping_parens_survives_the_repair(self) -> None:
+        """A repaired entry's marker may itself use parens for boolean
+        grouping (`(a or b) and c`) -- unrelated to the PEP 345
+        parenthesized-version shape being repaired, and syntactically legal
+        on its own. Depth-tracking (not "match to the first `)`") is what
+        keeps these two parenthesized regions from being confused.
+        """
+        metadata = parse_metadata(
+            _text(
+                "Metadata-Version: 1.2",
+                "Name: tinylib",
+                "Version: 1.0",
+                "Requires-Dist: foo (>='1.0'); (extra == 'a' or extra == 'b')",
+            )
+        )
+
+        assert metadata.requires_dist == ('foo>=1.0; extra == "a" or extra == "b"',)
+
+    def test_unrepairable_parenthesized_entry_is_still_rejected(self) -> None:
+        """The quote-stripping repair is attempted (the entry matches the
+        parenthesized shape) but must not fabricate a valid specifier out of
+        a version that was never a quoting problem in the first place.
+        """
+        with pytest.raises(ValidationError):
+            parse_metadata(
+                _text(
+                    "Metadata-Version: 2.1",
+                    "Name: tinylib",
+                    "Version: 1.0",
+                    "Requires-Dist: foo (not-a-version)",
+                )
+            )
+
+    # ----------------------------------------------------------------------
+    # Malformed parens: the repair's paren-depth tracking must never
+    # mismatch a `)` to the wrong `(`, and must never turn genuinely
+    # unbalanced or doubled parens into a false-positive valid parse.
+    # ----------------------------------------------------------------------
+
+    def test_missing_closing_paren_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            parse_metadata(
+                _text(
+                    "Metadata-Version: 2.1",
+                    "Name: tinylib",
+                    "Version: 1.0",
+                    "Requires-Dist: foo (>='1.0'",
+                )
+            )
+
+    def test_stray_extra_closing_paren_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            parse_metadata(
+                _text(
+                    "Metadata-Version: 2.1",
+                    "Name: tinylib",
+                    "Version: 1.0",
+                    "Requires-Dist: foo (>='1.0'))",
+                )
+            )
+
+    def test_doubled_parens_without_quotes_is_still_rejected(self) -> None:
+        """No quotes to strip means the repair's reconstruction is identical
+        to the original -- it must not loop into a different, accidentally
+        valid interpretation.
+        """
+        with pytest.raises(ValidationError):
+            parse_metadata(
+                _text(
+                    "Metadata-Version: 2.1",
+                    "Name: tinylib",
+                    "Version: 1.0",
+                    "Requires-Dist: foo ((>=1.0))",
+                )
+            )
+
+    def test_nested_parens_inside_quoted_version_are_still_rejected(self) -> None:
+        """A version specifier can never legitimately contain parens
+        (nested or otherwise) -- depth-tracking must find the *matching*
+        outer `)` rather than the first one, but the result is still not a
+        valid specifier.
+        """
+        with pytest.raises(ValidationError):
+            parse_metadata(
+                _text(
+                    "Metadata-Version: 2.1",
+                    "Name: tinylib",
+                    "Version: 1.0",
+                    "Requires-Dist: foo (>='1.0(2.0)')",
+                )
+            )
+
+    def test_sibling_parenthesized_groups_is_rejected(self) -> None:
+        """PEP 345 allows at most one parenthesized version group right
+        after the name -- a second one is not a marker (no `;`) and is not
+        repaired.
+        """
+        with pytest.raises(ValidationError):
+            parse_metadata(
+                _text(
+                    "Metadata-Version: 2.1",
+                    "Name: tinylib",
+                    "Version: 1.0",
+                    "Requires-Dist: foo (>='1.0') (<='2.0')",
+                )
+            )
+
+    def test_closing_paren_inside_extras_is_rejected(self) -> None:
+        """A `)` inside the extras brackets (`foo[hello)]`) is swallowed by
+        the extras group's own `[^\\]]*` -- it never reaches the version
+        group's paren-depth counter at all. But `hello)` is not a valid
+        extra name either way, so the repaired reconstruction is rejected
+        same as the original, just for a different, unrelated reason.
+        """
+        with pytest.raises(ValidationError):
+            parse_metadata(
+                _text(
+                    "Metadata-Version: 2.1",
+                    "Name: tinylib",
+                    "Version: 1.0",
+                    "Requires-Dist: foo[hello)] (>='1.0')",
+                )
+            )
+
+    def test_entry_with_no_name_at_all_is_rejected(self) -> None:
+        """An entry that doesn't even start with a name has no PEP 345
+        parenthesized-version shape to repair.
+        """
+        with pytest.raises(ValidationError):
+            parse_metadata(
+                _text(
+                    "Metadata-Version: 2.1",
+                    "Name: tinylib",
+                    "Version: 1.0",
+                    "Requires-Dist: (orphan)",
+                )
+            )
+
+
+# --------------------------------------------------------------------------
+# `requires_dist` -- exhaustive `[]` / `()` combinations
+# --------------------------------------------------------------------------
+#
+# `_parse_requirement` is exercised directly (rather than through
+# `parse_metadata`) since these are unit-level checks of the paren-depth
+# repair itself, not of the METADATA-parsing pipeline around it.
+
+
+class TestParseRequirementBracketParenCombinationsRepaired:
+    @pytest.mark.parametrize(
+        ("value", "expected"),
+        [
+            ("foo (>='1.0')", "foo>=1.0"),
+            ('foo (>="1.0")', "foo>=1.0"),
+            ("foo[bar] (>='1.0')", "foo[bar]>=1.0"),
+            ('foo[bar] (>="1.0")', "foo[bar]>=1.0"),
+            ("foo[bar,baz] (>='1.0')", "foo[bar,baz]>=1.0"),
+            ('foo[bar,baz] (>="1.0")', "foo[bar,baz]>=1.0"),
+            ("foo[bar](>='1.0')", "foo[bar]>=1.0"),
+            ("foo [bar] (>='1.0')", "foo[bar]>=1.0"),
+        ],
+        ids=[
+            "no_extras_single_quotes",
+            "no_extras_double_quotes",
+            "one_extra_single_quotes",
+            "one_extra_double_quotes",
+            "multiple_extras_single_quotes",
+            "multiple_extras_double_quotes",
+            "no_space_before_paren",
+            "space_before_bracket",
+        ],
+    )
+    def test_repaired(self, value: str, expected: str) -> None:
+        assert str(_parse_requirement(value)) == expected
+
+    def test_repaired_marker_with_extras_and_grouping_parens(self) -> None:
+        """Extras, a quoted legacy version, and a marker with its own
+        grouping parens, all in one entry.
+        """
+        value = "foo[bar] (>='1.0'); (extra == 'a' or extra == 'b')"
+
+        assert str(_parse_requirement(value)) == 'foo[bar]>=1.0; extra == "a" or extra == "b"'
+
+
+class TestParseRequirementBracketParenCombinationsRejected:
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "foo[bar (>='1.0')",
+            "foo[[bar]] (>='1.0')",
+            "foo[bar][baz] (>='1.0')",
+            "foo bar] (>='1.0')",
+            "foo[hello)] (>='1.0')",
+            "foo[hel(lo] (>='1.0')",
+            "foo[(bar)] (>='1.0')",
+            "foo['bar'] (>='1.0')",
+            "foo[bar] (>='1.0'",
+            "foo[bar] (>='1.0'))",
+            "foo[bar] ((>=1.0))",
+            "foo[bar] (>='1.0(2.0)')",
+            "foo[bar] (>='1.0') (<='2.0')",
+            "foo[bar] (not-a-version)",
+        ],
+        ids=[
+            "extras_missing_closing_bracket",
+            "doubled_nested_brackets",
+            "two_separate_extras_groups",
+            "stray_closing_bracket_no_opening",
+            "closing_paren_inside_extras",
+            "opening_paren_inside_extras",
+            "balanced_parens_inside_extras",
+            "quotes_inside_extras",
+            "extras_missing_closing_paren",
+            "extras_stray_extra_closing_paren",
+            "extras_doubled_parens_no_quotes",
+            "extras_nested_parens_in_quoted_version",
+            "extras_sibling_paren_groups",
+            "extras_unrepairable_non_quote_issue",
+        ],
+    )
+    def test_rejected(self, value: str) -> None:
+        with pytest.raises(InvalidRequirement):
+            _parse_requirement(value)
 
 
 # --------------------------------------------------------------------------
@@ -382,3 +717,19 @@ class TestEncodingChallenges:
     def test_embedded_null_in_name_is_rejected(self) -> None:
         with pytest.raises(ValidationError):
             parse_metadata(_text("Metadata-Version: 2.1", "Name: tiny\x00lib", "Version: 1.0"))
+
+
+# --------------------------------------------------------------------------
+# Truncated / empty METADATA
+# --------------------------------------------------------------------------
+
+
+class TestEmptyMetadata:
+    def test_empty_content_is_rejected(self) -> None:
+        """A zero-byte `METADATA` file -- e.g. from a corrupted download --
+        has no headers at all, so both `name` and `version` come back empty.
+        Both are already rejected individually; this locks in that the
+        combination is too.
+        """
+        with pytest.raises(ValidationError):
+            parse_metadata("")

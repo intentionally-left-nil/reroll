@@ -16,6 +16,22 @@ Every edge case gets a test *before* the code that handles it exists.
 3. Implement the minimum needed to make it pass. A test is never edited to
    match the implementation's output.
 
+Some amount of `uv run python3 -c ...` exploration is fine for quick,
+throwaway sanity checks — e.g. confirming a value you already computed, or
+checking basic Python syntax. It is *not* fine for exploring how code you
+did not just write behaves — stdlib, a dependency, reroll's own existing
+code, anything. The test is purpose, not package name: are you running
+this to *discover* what some input produces (an edge case, an encoding
+quirk, "what does this raise for X?", "what does the real-world data
+actually look like?") rather than to confirm something you already know
+the answer to? If discovery is the point, stop before running it and write
+that exploration as a unit test in `tests/` instead, then run it with
+`make test`. A one-liner is not a lighter-weight version of that test —
+its output vanishes, so it has to be redone (and re-discovered) the next
+time the same question comes up. The test is the durable, re-runnable
+version of the same few lines of code, and it directly grows the edge-case
+corpus the codebase is trying to build.
+
 ## Commands
 
 - `make install` — sync deps (uv)

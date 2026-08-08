@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import pytest
-from packaging.requirements import InvalidRequirement
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 from pydantic import ValidationError
 
-from reroll.wheel_metadata import WheelMetadata, _parse_requirement, parse_metadata
+from reroll.wheel_metadata import WheelMetadata, parse_metadata
 
 _MINIMAL = "Metadata-Version: 2.1\nName: tinylib\nVersion: 1.2.3\n\n"
 
@@ -62,6 +61,85 @@ class TestName:
         metadata = WheelMetadata.model_validate({"name": "Tiny_Lib", "version": "1.0"})
 
         assert metadata.name == "tiny-lib"
+
+
+# --------------------------------------------------------------------------
+# Boundary cases: ambiguous single-value headers
+# --------------------------------------------------------------------------
+
+
+class TestAmbiguousSingleValueHeaders:
+    """A header that's supposed to appear at most once -- `Name`, `Version`,
+    `License`, `License-Expression`, `Requires-Python` -- is routed by
+    `packaging.metadata.parse_email` to its `unparsed` dict, rather than
+    being decoded, if it's repeated or mojibake-encoded from non-UTF-8
+    bytes. Per `docs/wheel_metadata.md`, this must fail metadata parsing
+    the same as an invalid value would, not silently fall back to the
+    field's default -- unlike `Name` (covered in `TestName`), these fields
+    are all optional, so without this handling a duplicate/undecodable
+    header would be indistinguishable from an absent one.
+    """
+
+    def test_duplicate_license_expression_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            parse_metadata(
+                _text(
+                    "Metadata-Version: 2.4",
+                    "Name: tinylib",
+                    "Version: 1.0",
+                    "License-Expression: MIT",
+                    "License-Expression: Apache-2.0",
+                )
+            )
+
+    def test_duplicate_license_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            parse_metadata(
+                _text(
+                    "Metadata-Version: 2.1",
+                    "Name: tinylib",
+                    "Version: 1.0",
+                    "License: MIT",
+                    "License: Apache-2.0",
+                )
+            )
+
+    def test_duplicate_version_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            parse_metadata(
+                _text(
+                    "Metadata-Version: 2.1",
+                    "Name: tinylib",
+                    "Version: 1.0",
+                    "Version: 2.0",
+                )
+            )
+
+    def test_duplicate_requires_python_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            parse_metadata(
+                _text(
+                    "Metadata-Version: 2.1",
+                    "Name: tinylib",
+                    "Version: 1.0",
+                    "Requires-Python: >=3.6",
+                    "Requires-Python: >=3.8",
+                )
+            )
+
+    def test_mojibake_encoded_license_is_rejected(self) -> None:
+        """A `License` value containing a byte that isn't valid UTF-8 --
+        e.g. from a METADATA file read with `errors="surrogateescape"` to
+        tolerate an unknown encoding -- makes `parse_email` route it to
+        `unparsed` the same way a duplicate header would, rather than
+        decoding it.
+        """
+        metadata_text = (
+            "Metadata-Version: 2.1\nName: tinylib\nVersion: 1.0\nLicense: Caf\udce9 License\n\n"
+        )
+
+        with pytest.raises(ValidationError):
+            parse_metadata(metadata_text)
 
 
 # --------------------------------------------------------------------------
@@ -220,29 +298,12 @@ class TestRequiresPython:
                 )
             )
 
-    def test_missing_separator_between_exclusion_clauses_is_repaired(self) -> None:
-        """Real, published wheel metadata has been seen with no separator
-        between adjacent exclusion clauses -- `!=3.4.*!=3.5.*` instead of
-        `!=3.4.*, !=3.5.*`.
+    def test_missing_separator_is_repaired_by_lenient_fixup(self) -> None:
+        """`>=3.6<4.0` is missing a comma between two clauses -- a digit
+        immediately followed by an operator, which is exactly the shape
+        uv's `LenientRequirement` fixups (via `reroll.lenient_parser`)
+        repair. See `docs/wheel_metadata.md`'s lenient-parsing decisions.
         """
-        metadata = parse_metadata(
-            _text(
-                "Metadata-Version: 2.1",
-                "Name: tinylib",
-                "Version: 1.0",
-                "Requires-Python: >=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*!=3.5.*",
-            )
-        )
-
-        assert metadata.requires_python is not None
-        specifiers = SpecifierSet(metadata.requires_python)
-        assert Version("2.6") not in specifiers
-        assert Version("3.0.1") not in specifiers
-        assert Version("3.4.1") not in specifiers
-        assert Version("3.5.1") not in specifiers
-        assert Version("3.6.0") in specifiers
-
-    def test_missing_separator_between_other_clauses_is_repaired(self) -> None:
         metadata = parse_metadata(
             _text(
                 "Metadata-Version: 2.1",
@@ -258,9 +319,27 @@ class TestRequiresPython:
         assert Version("3.7") in specifiers
         assert Version("4.0") not in specifiers
 
+    def test_missing_separator_not_covered_by_lenient_fixups_is_rejected(self) -> None:
+        """`!=3.4.*!=3.5.*` is missing a comma between two clauses too, but
+        the gap is between a wildcard (`*`) and the next clause's operator,
+        not between a digit and an operator -- a shape none of uv's
+        `LenientRequirement` fixups repair. Reroll only accepts what uv's
+        logic accepts (see `docs/wheel_metadata.md`), so this is rejected
+        rather than repaired by a reroll-specific rule.
+        """
+        with pytest.raises(ValidationError):
+            parse_metadata(
+                _text(
+                    "Metadata-Version: 2.1",
+                    "Name: tinylib",
+                    "Version: 1.0",
+                    "Requires-Python: >=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*!=3.5.*",
+                )
+            )
+
     def test_unrepairable_invalid_specifier_is_still_rejected(self) -> None:
-        """The missing-separator repair must not silently accept garbage
-        that merely happens to contain digits and operators.
+        """The lenient fixups must not silently accept garbage that merely
+        happens to contain digits and operators.
         """
         with pytest.raises(ValidationError):
             parse_metadata(
@@ -339,11 +418,30 @@ class TestRequiresDist:
                 )
             )
 
-    def test_quoted_legacy_parenthesized_version_is_repaired(self) -> None:
+    def test_lenient_fixup_repairs_missing_comma(self) -> None:
+        """`elasticsearch-dsl (>=7.2.0<8.0.0)` is missing a comma between
+        two clauses inside the (PEP 345 style) parenthesized version --
+        exactly the shape uv's `LenientRequirement` fixups (via
+        `reroll.lenient_parser`) repair. See `docs/wheel_metadata.md`'s
+        lenient-parsing decisions.
+        """
+        metadata = parse_metadata(
+            _text(
+                "Metadata-Version: 1.2",
+                "Name: tinylib",
+                "Version: 1.0",
+                "Requires-Dist: elasticsearch-dsl (>=7.2.0<8.0.0)",
+            )
+        )
+
+        assert metadata.requires_dist == ("elasticsearch-dsl<8.0.0,>=7.2.0",)
+
+    def test_lenient_fixup_repairs_stray_quotes(self) -> None:
         """Some old wheel builders quote the version inside a PEP 345
-        parenthesized specifier -- e.g. `python-version (>='3.10')`, seen in
-        real, published wheel metadata -- which PEP 440 doesn't allow:
-        version specifiers never contain quote characters.
+        parenthesized specifier -- e.g. `python-version (>='3.10')`, seen
+        in real, published wheel metadata -- which PEP 440 doesn't allow:
+        version specifiers never contain quote characters. uv's
+        `LenientRequirement` fixups strip stray quotes like this.
         """
         metadata = parse_metadata(
             _text(
@@ -356,22 +454,10 @@ class TestRequiresDist:
 
         assert metadata.requires_dist == ("python-version>=3.10",)
 
-    def test_quoted_legacy_parenthesized_version_with_extras_is_repaired(self) -> None:
-        metadata = parse_metadata(
-            _text(
-                "Metadata-Version: 1.2",
-                "Name: tinylib",
-                "Version: 1.0",
-                "Requires-Dist: foo[bar] (>='1.0')",
-            )
-        )
-
-        assert metadata.requires_dist == ("foo[bar]>=1.0",)
-
-    def test_quoted_legacy_parenthesized_version_keeps_marker_quotes(self) -> None:
-        """The repair only strips quotes from the parenthesized version --
-        a trailing environment marker's own quoted string literals (required
-        by PEP 508 grammar) must survive untouched.
+    def test_lenient_fixup_preserves_marker_quotes(self) -> None:
+        """The stray-quote fixup only strips quotes before a trailing `;`
+        marker -- the marker's own quoted string literals (required by PEP
+        508 grammar) survive untouched.
         """
         metadata = parse_metadata(
             _text(
@@ -384,40 +470,10 @@ class TestRequiresDist:
 
         assert metadata.requires_dist == ('foo>=1.0; python_version >= "3.10"',)
 
-    def test_quoted_legacy_parenthesized_version_with_double_quotes_is_repaired(self) -> None:
-        metadata = parse_metadata(
-            _text(
-                "Metadata-Version: 1.2",
-                "Name: tinylib",
-                "Version: 1.0",
-                'Requires-Dist: foo (>="1.0")',
-            )
-        )
-
-        assert metadata.requires_dist == ("foo>=1.0",)
-
-    def test_marker_with_its_own_grouping_parens_survives_the_repair(self) -> None:
-        """A repaired entry's marker may itself use parens for boolean
-        grouping (`(a or b) and c`) -- unrelated to the PEP 345
-        parenthesized-version shape being repaired, and syntactically legal
-        on its own. Depth-tracking (not "match to the first `)`") is what
-        keeps these two parenthesized regions from being confused.
-        """
-        metadata = parse_metadata(
-            _text(
-                "Metadata-Version: 1.2",
-                "Name: tinylib",
-                "Version: 1.0",
-                "Requires-Dist: foo (>='1.0'); (extra == 'a' or extra == 'b')",
-            )
-        )
-
-        assert metadata.requires_dist == ('foo>=1.0; extra == "a" or extra == "b"',)
-
-    def test_unrepairable_parenthesized_entry_is_still_rejected(self) -> None:
-        """The quote-stripping repair is attempted (the entry matches the
-        parenthesized shape) but must not fabricate a valid specifier out of
-        a version that was never a quoting problem in the first place.
+    def test_unrepairable_entry_is_still_rejected(self) -> None:
+        """The lenient fixups are attempted, but must not fabricate a valid
+        requirement out of an entry that was never fixable in the first
+        place.
         """
         with pytest.raises(ValidationError):
             parse_metadata(
@@ -428,197 +484,6 @@ class TestRequiresDist:
                     "Requires-Dist: foo (not-a-version)",
                 )
             )
-
-    # ----------------------------------------------------------------------
-    # Malformed parens: the repair's paren-depth tracking must never
-    # mismatch a `)` to the wrong `(`, and must never turn genuinely
-    # unbalanced or doubled parens into a false-positive valid parse.
-    # ----------------------------------------------------------------------
-
-    def test_missing_closing_paren_is_rejected(self) -> None:
-        with pytest.raises(ValidationError):
-            parse_metadata(
-                _text(
-                    "Metadata-Version: 2.1",
-                    "Name: tinylib",
-                    "Version: 1.0",
-                    "Requires-Dist: foo (>='1.0'",
-                )
-            )
-
-    def test_stray_extra_closing_paren_is_rejected(self) -> None:
-        with pytest.raises(ValidationError):
-            parse_metadata(
-                _text(
-                    "Metadata-Version: 2.1",
-                    "Name: tinylib",
-                    "Version: 1.0",
-                    "Requires-Dist: foo (>='1.0'))",
-                )
-            )
-
-    def test_doubled_parens_without_quotes_is_still_rejected(self) -> None:
-        """No quotes to strip means the repair's reconstruction is identical
-        to the original -- it must not loop into a different, accidentally
-        valid interpretation.
-        """
-        with pytest.raises(ValidationError):
-            parse_metadata(
-                _text(
-                    "Metadata-Version: 2.1",
-                    "Name: tinylib",
-                    "Version: 1.0",
-                    "Requires-Dist: foo ((>=1.0))",
-                )
-            )
-
-    def test_nested_parens_inside_quoted_version_are_still_rejected(self) -> None:
-        """A version specifier can never legitimately contain parens
-        (nested or otherwise) -- depth-tracking must find the *matching*
-        outer `)` rather than the first one, but the result is still not a
-        valid specifier.
-        """
-        with pytest.raises(ValidationError):
-            parse_metadata(
-                _text(
-                    "Metadata-Version: 2.1",
-                    "Name: tinylib",
-                    "Version: 1.0",
-                    "Requires-Dist: foo (>='1.0(2.0)')",
-                )
-            )
-
-    def test_sibling_parenthesized_groups_is_rejected(self) -> None:
-        """PEP 345 allows at most one parenthesized version group right
-        after the name -- a second one is not a marker (no `;`) and is not
-        repaired.
-        """
-        with pytest.raises(ValidationError):
-            parse_metadata(
-                _text(
-                    "Metadata-Version: 2.1",
-                    "Name: tinylib",
-                    "Version: 1.0",
-                    "Requires-Dist: foo (>='1.0') (<='2.0')",
-                )
-            )
-
-    def test_closing_paren_inside_extras_is_rejected(self) -> None:
-        """A `)` inside the extras brackets (`foo[hello)]`) is swallowed by
-        the extras group's own `[^\\]]*` -- it never reaches the version
-        group's paren-depth counter at all. But `hello)` is not a valid
-        extra name either way, so the repaired reconstruction is rejected
-        same as the original, just for a different, unrelated reason.
-        """
-        with pytest.raises(ValidationError):
-            parse_metadata(
-                _text(
-                    "Metadata-Version: 2.1",
-                    "Name: tinylib",
-                    "Version: 1.0",
-                    "Requires-Dist: foo[hello)] (>='1.0')",
-                )
-            )
-
-    def test_entry_with_no_name_at_all_is_rejected(self) -> None:
-        """An entry that doesn't even start with a name has no PEP 345
-        parenthesized-version shape to repair.
-        """
-        with pytest.raises(ValidationError):
-            parse_metadata(
-                _text(
-                    "Metadata-Version: 2.1",
-                    "Name: tinylib",
-                    "Version: 1.0",
-                    "Requires-Dist: (orphan)",
-                )
-            )
-
-
-# --------------------------------------------------------------------------
-# `requires_dist` -- exhaustive `[]` / `()` combinations
-# --------------------------------------------------------------------------
-#
-# `_parse_requirement` is exercised directly (rather than through
-# `parse_metadata`) since these are unit-level checks of the paren-depth
-# repair itself, not of the METADATA-parsing pipeline around it.
-
-
-class TestParseRequirementBracketParenCombinationsRepaired:
-    @pytest.mark.parametrize(
-        ("value", "expected"),
-        [
-            ("foo (>='1.0')", "foo>=1.0"),
-            ('foo (>="1.0")', "foo>=1.0"),
-            ("foo[bar] (>='1.0')", "foo[bar]>=1.0"),
-            ('foo[bar] (>="1.0")', "foo[bar]>=1.0"),
-            ("foo[bar,baz] (>='1.0')", "foo[bar,baz]>=1.0"),
-            ('foo[bar,baz] (>="1.0")', "foo[bar,baz]>=1.0"),
-            ("foo[bar](>='1.0')", "foo[bar]>=1.0"),
-            ("foo [bar] (>='1.0')", "foo[bar]>=1.0"),
-        ],
-        ids=[
-            "no_extras_single_quotes",
-            "no_extras_double_quotes",
-            "one_extra_single_quotes",
-            "one_extra_double_quotes",
-            "multiple_extras_single_quotes",
-            "multiple_extras_double_quotes",
-            "no_space_before_paren",
-            "space_before_bracket",
-        ],
-    )
-    def test_repaired(self, value: str, expected: str) -> None:
-        assert str(_parse_requirement(value)) == expected
-
-    def test_repaired_marker_with_extras_and_grouping_parens(self) -> None:
-        """Extras, a quoted legacy version, and a marker with its own
-        grouping parens, all in one entry.
-        """
-        value = "foo[bar] (>='1.0'); (extra == 'a' or extra == 'b')"
-
-        assert str(_parse_requirement(value)) == 'foo[bar]>=1.0; extra == "a" or extra == "b"'
-
-
-class TestParseRequirementBracketParenCombinationsRejected:
-    @pytest.mark.parametrize(
-        "value",
-        [
-            "foo[bar (>='1.0')",
-            "foo[[bar]] (>='1.0')",
-            "foo[bar][baz] (>='1.0')",
-            "foo bar] (>='1.0')",
-            "foo[hello)] (>='1.0')",
-            "foo[hel(lo] (>='1.0')",
-            "foo[(bar)] (>='1.0')",
-            "foo['bar'] (>='1.0')",
-            "foo[bar] (>='1.0'",
-            "foo[bar] (>='1.0'))",
-            "foo[bar] ((>=1.0))",
-            "foo[bar] (>='1.0(2.0)')",
-            "foo[bar] (>='1.0') (<='2.0')",
-            "foo[bar] (not-a-version)",
-        ],
-        ids=[
-            "extras_missing_closing_bracket",
-            "doubled_nested_brackets",
-            "two_separate_extras_groups",
-            "stray_closing_bracket_no_opening",
-            "closing_paren_inside_extras",
-            "opening_paren_inside_extras",
-            "balanced_parens_inside_extras",
-            "quotes_inside_extras",
-            "extras_missing_closing_paren",
-            "extras_stray_extra_closing_paren",
-            "extras_doubled_parens_no_quotes",
-            "extras_nested_parens_in_quoted_version",
-            "extras_sibling_paren_groups",
-            "extras_unrepairable_non_quote_issue",
-        ],
-    )
-    def test_rejected(self, value: str) -> None:
-        with pytest.raises(InvalidRequirement):
-            _parse_requirement(value)
 
 
 # --------------------------------------------------------------------------
@@ -645,16 +510,22 @@ class TestProvidesExtra:
 
         assert metadata.provides_extra == ("cli-tools", "test")
 
-    def test_invalid_entry_is_rejected(self) -> None:
-        with pytest.raises(ValidationError):
-            parse_metadata(
-                _text(
-                    "Metadata-Version: 2.1",
-                    "Name: tinylib",
-                    "Version: 1.0",
-                    "Provides-Extra: not valid!",
-                )
+    def test_malformed_entry_is_normalized_not_rejected(self) -> None:
+        """`Provides-Extra` uses `canonicalize_name` without `validate=True`
+        -- unlike `name` -- so metadata parsing never fails for this field;
+        a malformed entry is merely normalized (runs of `-`/`_`/`.`
+        collapsed to a single `-`, lowercased), not rejected.
+        """
+        metadata = parse_metadata(
+            _text(
+                "Metadata-Version: 2.1",
+                "Name: tinylib",
+                "Version: 1.0",
+                "Provides-Extra: not valid!",
             )
+        )
+
+        assert metadata.provides_extra == ("not valid!",)
 
 
 # --------------------------------------------------------------------------

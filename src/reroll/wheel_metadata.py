@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import re
 from typing import Annotated
 
 from packaging.licenses import canonicalize_license_expression
-from packaging.metadata import parse_email
-from packaging.requirements import InvalidRequirement, Requirement
-from packaging.specifiers import InvalidSpecifier, SpecifierSet
+from packaging.metadata import RawMetadata, parse_email
 from packaging.utils import canonicalize_name
 from pydantic import AfterValidator, BaseModel, ConfigDict, field_validator
 
 from reroll.filename.py_version import PyVersion
+from reroll.lenient_parser import parse_lenient_requirement, parse_lenient_version_specifiers
 
 _LICENSE_CLASSIFIER_PREFIX = "License :: "
 
@@ -26,11 +24,19 @@ def _normalize_dist_name(value: str) -> str:
 
 
 _NormalizedDistName = Annotated[str, AfterValidator(_normalize_dist_name)]
-"""A `str` PyPI distribution or extra name, canonicalized per PEP 503.
+"""A `str` PyPI distribution name, canonicalized per PEP 503 and rejected
+if it doesn't also match the modern (PEP 508) name grammar.
 
 Deliberately a plain `str` annotated with a validator -- not
 `packaging.utils.NormalizedName` -- so the field's static type matches what
 it actually accepts as input.
+"""
+
+_NormalizedExtraName = Annotated[str, AfterValidator(canonicalize_name)]
+"""A `str` PyPI extra name, canonicalized per PEP 503 *without* the PEP 508
+grammar check `_NormalizedDistName` applies -- per `docs/wheel_metadata.md`,
+`Provides-Extra` is deliberately more lenient than `Name`, so this can never
+fail to validate.
 """
 
 
@@ -46,7 +52,7 @@ class WheelMetadata(BaseModel):
     license_classifiers: tuple[str, ...] = ()
     requires_python: str | None = None
     requires_dist: tuple[str, ...] = ()
-    provides_extra: tuple[_NormalizedDistName, ...] = ()
+    provides_extra: tuple[_NormalizedExtraName, ...] = ()
 
     @field_validator("license_expression")
     @classmethod
@@ -60,103 +66,69 @@ class WheelMetadata(BaseModel):
     def _validate_requires_python(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        try:
-            specifiers = SpecifierSet(value)
-        except InvalidSpecifier:
-            specifiers = SpecifierSet(_insert_missing_specifier_separators(value))
-        return str(specifiers)
+        return str(parse_lenient_version_specifiers(value))
 
     @field_validator("requires_dist")
     @classmethod
     def _validate_requires_dist(cls, value: tuple[str, ...]) -> tuple[str, ...]:
-        """Each entry must parse as a PEP 508 requirement. `packaging`
-        already upgrades the older PEP 345 parenthesized-version,
-        `sys.platform`-marker style to modern syntax, so `str(Requirement(...))`
-        is enough -- no separate old/new-style handling is needed.
+        """Each entry must parse as a PEP 508 requirement, trying
+        `packaging.requirements.Requirement` first and falling back to
+        uv's `LenientRequirement` fixups on failure -- see
+        `reroll.lenient_parser`.
         """
-        return tuple(str(_parse_requirement(item)) for item in value)
+        return tuple(str(parse_lenient_requirement(item)) for item in value)
+
+
+_AMBIGUOUS_FIELD = object()
+"""Sentinel for a METADATA header that's supposed to appear at most once,
+but that `parse_email` couldn't treat as a single, well-formed value --
+either because it's repeated or because it's mojibake-encoded from
+non-UTF-8 bytes. Both cases land in `parse_email`'s `unparsed` dict,
+indistinguishable from each other but distinguishable from the header
+being entirely absent. Passing this sentinel straight through as a field's
+raw value (instead of defaulting to `None`) makes pydantic's own type
+validation reject it, so an ambiguous header can never be silently treated
+the same as an absent one.
+"""
 
 
 def parse_metadata(metadata: str) -> WheelMetadata:
     """Parse a wheel's `.dist-info/METADATA` contents into a `WheelMetadata`.
-    Only fields that reroll cares about are recorded
+    Only fields that reroll cares about are recorded.
     """
-    raw, _unparsed = parse_email(metadata)
+    raw, unparsed = parse_email(metadata)
     classifiers = raw.get("classifiers") or []
     return WheelMetadata.model_validate(
         {
-            "name": raw.get("name") or "",
-            "version": raw.get("version") or "",
-            "license_expression": raw.get("license_expression"),
-            "license": raw.get("license"),
+            "name": _single_value_field(raw, unparsed, "name", "name"),
+            "version": _single_value_field(raw, unparsed, "version", "version"),
+            "license_expression": _single_value_field(
+                raw, unparsed, "license_expression", "license-expression"
+            ),
+            "license": _single_value_field(raw, unparsed, "license", "license"),
             "license_classifiers": tuple(
                 classifier
                 for classifier in classifiers
                 if classifier.startswith(_LICENSE_CLASSIFIER_PREFIX)
             ),
-            "requires_python": raw.get("requires_python"),
+            "requires_python": _single_value_field(
+                raw, unparsed, "requires_python", "requires-python"
+            ),
             "requires_dist": tuple(raw.get("requires_dist") or ()),
             "provides_extra": tuple(raw.get("provides_extra") or ()),
         }
     )
 
 
-_MISSING_SPECIFIER_SEPARATOR_RE = re.compile(r"(?<=[0-9*])(?=!=|===|==|>=|<=|~=|<|>)")
-
-
-def _insert_missing_specifier_separators(value: str) -> str:
-    """Repairs a `requires_python` value with no separator between adjacent
-    clauses -- e.g. `!=3.4.*!=3.5.*` instead of `!=3.4.*, !=3.5.*`, seen in
-    real, published wheel metadata -- by inserting a comma wherever one
-    clause's version segment is immediately followed by another clause's
-    operator.
+def _single_value_field(
+    raw: RawMetadata, unparsed: dict[str, list[str]], raw_name: str, email_name: str
+) -> object:
+    """The METADATA value for a header that's supposed to appear at most
+    once. Returns the value itself if `parse_email` parsed it, `None` if
+    the header is entirely absent, or `_AMBIGUOUS_FIELD` if the header is
+    present in `unparsed` -- repeated, or undecodable.
     """
-    return _MISSING_SPECIFIER_SEPARATOR_RE.sub(",", value)
-
-
-_LEGACY_NAME_PREFIX_RE = re.compile(r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*(?:\s*\[[^\]]*\])?)\s*")
-
-
-def _split_legacy_parenthesized_version(value: str) -> tuple[str, str, str] | None:
-    """Splits `value` into `(name_and_extras, specifier, rest)` if it starts
-    with `<name>[extras] (<specifier>)<rest>` -- PEP 345's optional
-    parenthesized-version shape. Paren depth is tracked (not just matched to
-    the first `)`) so a stray nested paren in a malformed `specifier` can't
-    be mistaken for the group's closing paren. Returns `None` if `value`
-    isn't shaped like this at all, or its parens never balance back to 0.
-    """
-    match = _LEGACY_NAME_PREFIX_RE.match(value)
-    if match is None:
-        return None
-    rest = value[match.end() :]
-    if not rest.startswith("("):
-        return None
-    depth = 1
-    for index in range(1, len(rest)):
-        if rest[index] == "(":
-            depth += 1
-        elif rest[index] == ")":
-            depth -= 1
-            if depth == 0:
-                return match["name"], rest[1:index], rest[index + 1 :]
-    return None
-
-
-def _parse_requirement(value: str) -> Requirement:
-    """Parses a `requires_dist` entry, repairing one known-bad shape: some
-    old wheel builders quote the version inside a PEP 345 parenthesized
-    specifier -- e.g. `python-version (>='3.10')`, seen in real, published
-    wheel metadata -- which PEP 440 doesn't allow, since version specifiers
-    never contain quote characters. Only the parenthesized portion is
-    touched, so a trailing marker's own quoted string literals (and its own
-    grouping parens, if any) survive untouched.
-    """
-    try:
-        return Requirement(value)
-    except InvalidRequirement:
-        split = _split_legacy_parenthesized_version(value)
-        if split is None:
-            raise
-        name_and_extras, specifier, rest = split
-        specifier = specifier.replace("'", "").replace('"', "")
-        return Requirement(f"{name_and_extras}({specifier}){rest}")
+    value = raw.get(raw_name)
+    if value is not None:
+        return value
+    return _AMBIGUOUS_FIELD if email_name in unparsed else None

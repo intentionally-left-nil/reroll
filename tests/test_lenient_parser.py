@@ -52,6 +52,11 @@ class TestParseLenientRequirement:
 
         assert actual == Requirement("torch (>=1.9)")
 
+    def test_greater_than_star_with_space(self) -> None:
+        actual = parse_lenient_requirement("torch (>= 1.9.*)")
+
+        assert actual == Requirement("torch (>= 1.9)")
+
     def test_missing_dot(self) -> None:
         actual = parse_lenient_requirement("pyzmq (>=2.7,!=3.0*,!=3.1*,!=3.2*)")
 
@@ -114,6 +119,10 @@ class TestParseLenientVersionSpecifiers:
     def test_greater_than_star(self) -> None:
         actual = parse_lenient_version_specifiers(">=1.9.*")
         assert actual == SpecifierSet(">=1.9")
+
+    def test_greater_than_star_with_space(self) -> None:
+        actual = parse_lenient_version_specifiers(">= 1.9.*")
+        assert actual == SpecifierSet(">= 1.9")
 
         actual = parse_lenient_version_specifiers(">=1.*")
         assert actual == SpecifierSet(">=1")

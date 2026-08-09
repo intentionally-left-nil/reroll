@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated
 
-from packaging.licenses import canonicalize_license_expression
+from packaging.licenses import InvalidLicenseExpression, canonicalize_license_expression
 from packaging.metadata import RawMetadata, parse_email
 from packaging.utils import canonicalize_name
 from pydantic import AfterValidator, BaseModel, ConfigDict, field_validator
@@ -13,6 +14,8 @@ from reroll.filename.py_version import PyVersion
 from reroll.lenient_parser import parse_lenient_requirement, parse_lenient_version_specifiers
 
 _LICENSE_CLASSIFIER_PREFIX = "License :: "
+
+_logger = logging.getLogger(__name__)
 
 
 def _normalize_dist_name(value: str) -> str:
@@ -57,9 +60,20 @@ class WheelMetadata(BaseModel):
     @field_validator("license_expression")
     @classmethod
     def _validate_license_expression(cls, value: str | None) -> str | None:
+        """`None` for both an absent header and one that fails to parse as
+        a valid SPDX expression -- unlike most fields, per
+        `docs/wheel_metadata.md`. Publishing tools and PyPI are supposed to
+        reject an invalid `License-Expression` at upload time (PEP 639),
+        but pip/uv never parse this field, so a bad value has no bearing
+        on whether the wheel installs.
+        """
         if value is None:
             return None
-        return str(canonicalize_license_expression(value))
+        try:
+            return str(canonicalize_license_expression(value))
+        except InvalidLicenseExpression:
+            _logger.debug("Dropping invalid License-Expression %r", value)
+            return None
 
     @field_validator("requires_python")
     @classmethod
@@ -82,13 +96,14 @@ class WheelMetadata(BaseModel):
 _AMBIGUOUS_FIELD = object()
 """Sentinel for a METADATA header that's supposed to appear at most once,
 but that `parse_email` couldn't treat as a single, well-formed value --
-either because it's repeated or because it's mojibake-encoded from
-non-UTF-8 bytes. Both cases land in `parse_email`'s `unparsed` dict,
-indistinguishable from each other but distinguishable from the header
-being entirely absent. Passing this sentinel straight through as a field's
-raw value (instead of defaulting to `None`) makes pydantic's own type
-validation reject it, so an ambiguous header can never be silently treated
-the same as an absent one.
+repeated with differing values, or mojibake-encoded from non-UTF-8 bytes.
+Both land in `parse_email`'s `unparsed` dict; a repeated header where every
+occurrence is byte-identical is resolved to that shared value instead (see
+`_single_value_field`), since it isn't actually ambiguous. This sentinel is
+also distinguishable from the header being entirely absent. Passing it
+straight through as a field's raw value (instead of defaulting to `None`)
+makes pydantic's own type validation reject it, so an ambiguous header can
+never be silently treated the same as an absent one.
 """
 
 
@@ -124,11 +139,19 @@ def _single_value_field(
     raw: RawMetadata, unparsed: dict[str, list[str]], raw_name: str, email_name: str
 ) -> object:
     """The METADATA value for a header that's supposed to appear at most
-    once. Returns the value itself if `parse_email` parsed it, `None` if
-    the header is entirely absent, or `_AMBIGUOUS_FIELD` if the header is
-    present in `unparsed` -- repeated, or undecodable.
+    once. Returns the value itself if `parse_email` parsed it; `None` if
+    the header is entirely absent; the shared value if the header repeats
+    with every occurrence byte-identical (not actually ambiguous -- real
+    wheels do this, e.g. the OZI build backend emitting `Name` twice); or
+    `_AMBIGUOUS_FIELD` otherwise -- repeated with differing values, or
+    undecodable. `parse_email` routes a single undecodable occurrence to
+    `unparsed` as a length-1 list, so that case always falls through to
+    `_AMBIGUOUS_FIELD` here too: there's nothing to compare it against.
     """
     value = raw.get(raw_name)
     if value is not None:
         return value
+    duplicates = unparsed.get(email_name)
+    if duplicates is not None and len(duplicates) > 1 and len(set(duplicates)) == 1:
+        return duplicates[0]
     return _AMBIGUOUS_FIELD if email_name in unparsed else None

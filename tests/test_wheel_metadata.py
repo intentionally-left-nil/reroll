@@ -36,13 +36,26 @@ class TestName:
         with pytest.raises(ValidationError):
             parse_metadata(_text("Metadata-Version: 2.1", "Version: 1.0"))
 
-    def test_duplicate_header_is_rejected(self) -> None:
-        """A repeated single-value header is demoted to 'unparsed' by
-        `packaging.metadata.parse_email`, which is indistinguishable from
-        the header being absent -- and absent is rejected too.
+    def test_duplicate_header_with_differing_values_is_rejected(self) -> None:
+        """A repeated single-value header with genuinely different values
+        is ambiguous -- which value is correct? -- so it's rejected.
         """
         with pytest.raises(ValidationError):
             parse_metadata(_text("Metadata-Version: 2.1", "Name: foo", "Name: bar", "Version: 1.0"))
+
+    def test_duplicate_header_with_identical_value_is_accepted(self) -> None:
+        """A repeated single-value header where every occurrence is
+        byte-identical isn't actually ambiguous -- there's only one value
+        being expressed twice. Real-world wheels (e.g. built by the OZI
+        build backend) emit `Name` this way; both pip and uv accept them
+        by taking the first occurrence, so rejecting them would be
+        stricter than reroll's own "match uv" acceptance bar.
+        """
+        metadata = parse_metadata(
+            _text("Metadata-Version: 2.1", "Name: tinylib", "Version: 1.0", "Name: tinylib")
+        )
+
+        assert metadata.name == "tinylib"
 
     def test_pep_345_style_name_is_rejected(self) -> None:
         """PEP 345's name grammar was more permissive than the modern
@@ -73,14 +86,16 @@ class TestAmbiguousSingleValueHeaders:
     `License`, `License-Expression`, `Requires-Python` -- is routed by
     `packaging.metadata.parse_email` to its `unparsed` dict, rather than
     being decoded, if it's repeated or mojibake-encoded from non-UTF-8
-    bytes. Per `docs/wheel_metadata.md`, this must fail metadata parsing
-    the same as an invalid value would, not silently fall back to the
-    field's default -- unlike `Name` (covered in `TestName`), these fields
-    are all optional, so without this handling a duplicate/undecodable
-    header would be indistinguishable from an absent one.
+    bytes. Per `docs/wheel_metadata.md`, a repeated header with genuinely
+    differing values must fail metadata parsing the same as an invalid
+    value would, not silently fall back to the field's default -- unlike
+    `Name` (covered in `TestName`), these fields are all optional, so
+    without this handling a duplicate/undecodable header would be
+    indistinguishable from an absent one. A repeated header where every
+    occurrence is byte-identical is not ambiguous, though, and is accepted.
     """
 
-    def test_duplicate_license_expression_is_rejected(self) -> None:
+    def test_duplicate_license_expression_with_differing_values_is_rejected(self) -> None:
         with pytest.raises(ValidationError):
             parse_metadata(
                 _text(
@@ -92,7 +107,20 @@ class TestAmbiguousSingleValueHeaders:
                 )
             )
 
-    def test_duplicate_license_is_rejected(self) -> None:
+    def test_duplicate_license_expression_with_identical_value_is_accepted(self) -> None:
+        metadata = parse_metadata(
+            _text(
+                "Metadata-Version: 2.4",
+                "Name: tinylib",
+                "Version: 1.0",
+                "License-Expression: MIT",
+                "License-Expression: MIT",
+            )
+        )
+
+        assert metadata.license_expression == "MIT"
+
+    def test_duplicate_license_with_differing_values_is_rejected(self) -> None:
         with pytest.raises(ValidationError):
             parse_metadata(
                 _text(
@@ -104,7 +132,20 @@ class TestAmbiguousSingleValueHeaders:
                 )
             )
 
-    def test_duplicate_version_is_rejected(self) -> None:
+    def test_duplicate_license_with_identical_value_is_accepted(self) -> None:
+        metadata = parse_metadata(
+            _text(
+                "Metadata-Version: 2.1",
+                "Name: tinylib",
+                "Version: 1.0",
+                "License: MIT",
+                "License: MIT",
+            )
+        )
+
+        assert metadata.license == "MIT"
+
+    def test_duplicate_version_with_differing_values_is_rejected(self) -> None:
         with pytest.raises(ValidationError):
             parse_metadata(
                 _text(
@@ -115,7 +156,19 @@ class TestAmbiguousSingleValueHeaders:
                 )
             )
 
-    def test_duplicate_requires_python_is_rejected(self) -> None:
+    def test_duplicate_version_with_identical_value_is_accepted(self) -> None:
+        metadata = parse_metadata(
+            _text(
+                "Metadata-Version: 2.1",
+                "Name: tinylib",
+                "Version: 1.0",
+                "Version: 1.0",
+            )
+        )
+
+        assert metadata.version == Version("1.0")
+
+    def test_duplicate_requires_python_with_differing_values_is_rejected(self) -> None:
         with pytest.raises(ValidationError):
             parse_metadata(
                 _text(
@@ -127,12 +180,26 @@ class TestAmbiguousSingleValueHeaders:
                 )
             )
 
+    def test_duplicate_requires_python_with_identical_value_is_accepted(self) -> None:
+        metadata = parse_metadata(
+            _text(
+                "Metadata-Version: 2.1",
+                "Name: tinylib",
+                "Version: 1.0",
+                "Requires-Python: >=3.6",
+                "Requires-Python: >=3.6",
+            )
+        )
+
+        assert metadata.requires_python == ">=3.6"
+
     def test_mojibake_encoded_license_is_rejected(self) -> None:
         """A `License` value containing a byte that isn't valid UTF-8 --
         e.g. from a METADATA file read with `errors="surrogateescape"` to
         tolerate an unknown encoding -- makes `parse_email` route it to
         `unparsed` the same way a duplicate header would, rather than
-        decoding it.
+        decoding it. A single mojibake-encoded occurrence has nothing to
+        compare against, so it's always ambiguous, never accepted.
         """
         metadata_text = (
             "Metadata-Version: 2.1\nName: tinylib\nVersion: 1.0\nLicense: Caf\udce9 License\n\n"
@@ -187,16 +254,43 @@ class TestLicenseExpression:
 
         assert metadata.license_expression == "MIT OR Apache-2.0"
 
-    def test_invalid_expression_is_rejected(self) -> None:
-        with pytest.raises(ValidationError):
-            parse_metadata(
-                _text(
-                    "Metadata-Version: 2.4",
-                    "Name: tinylib",
-                    "Version: 1.0",
-                    "License-Expression: not a valid @@ expression",
-                )
+    def test_non_spdx_expression_is_dropped_to_none(self) -> None:
+        """An unparseable `License-Expression` (invalid syntax, or a
+        syntactically-valid expression using an unknown license id) drops
+        to `None` rather than failing the whole record -- unlike most
+        fields, per `docs/wheel_metadata.md`. Publishing tools and PyPI
+        are supposed to reject this at upload time (see PEP 639), but
+        pip/uv never parse this field at all, so it has no bearing on
+        whether the wheel actually installs.
+        """
+        metadata = parse_metadata(
+            _text(
+                "Metadata-Version: 2.4",
+                "Name: tinylib",
+                "Version: 1.0",
+                "License-Expression: not a valid @@ expression",
             )
+        )
+
+        assert metadata.license_expression is None
+        assert metadata.name == "tinylib"
+
+    def test_unknown_license_id_is_dropped_to_none(self) -> None:
+        """Syntactically well-formed but referencing a license id that
+        isn't in the SPDX list -- a different failure mode than invalid
+        syntax, but `canonicalize_license_expression` raises the same
+        `InvalidLicenseExpression` for both, so both are dropped to `None`.
+        """
+        metadata = parse_metadata(
+            _text(
+                "Metadata-Version: 2.4",
+                "Name: tinylib",
+                "Version: 1.0",
+                "License-Expression: Use-it-after-midnight",
+            )
+        )
+
+        assert metadata.license_expression is None
 
 
 # --------------------------------------------------------------------------

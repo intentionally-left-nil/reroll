@@ -77,7 +77,7 @@ _MISSING_COMMA_RE = re.compile(r"(\d)([<>=~^!])")
 # Given `!=~5.0,>=4.12`, rewrite to `!=5.0.*,>=4.12`.
 _NOT_EQUAL_TILDE_RE = re.compile(r"!=~((?:\d\.)*\d)")
 # Given `>=1.9.*`, rewrite to `>=1.9`.
-_STAR_AFTER_COMPARISON_RE = re.compile(r"(<=|>=|<|>)(\d+(\.\d+)*)\.\*")
+_STAR_AFTER_COMPARISON_RE = re.compile(r"(<=|>=|<|>)(?:\s*)(\d+(\.\d+)*)\.\*")
 # Given `!=3.0*`, rewrite to `!=3.0.*`.
 _MISSING_DOT_RE = re.compile(r"(\d\.\d)+\*")
 # Given `>=3.6,`, rewrite to `>=3.6`.

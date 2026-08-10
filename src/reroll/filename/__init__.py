@@ -32,25 +32,43 @@ logger = logging.getLogger(__name__)
 
 
 def parse_filename(
-    filename: str, mappers: NameMappers, *, abi3_upper_bound: str | None = None
+    filename: str,
+    mappers: NameMappers,
+    *,
+    abi3_upper_bound: str | None = None,
+    allow_pre: bool = False,
 ) -> tuple[WheelConfig, ...]:
     """Parse a wheel filename into zero or more `WheelConfig`s.
 
     Never raises for filename input: an unparseable filename or a filename
     with no supported `(tag, arch)` combination both return `()`, and the
     reason is logged at `DEBUG`. A mapper chain that raises
-    `UnresolvedCandidates` also yields `()`, but is logged at `WARNING`
-    since (unlike the other rejections) it has a concrete, actionable fix
+    `UnresolvedCandidates`, or a pre-release version rejected by
+    `allow_pre`, also yield `()`, but are logged at `WARNING` since (unlike
+    the other rejections) they have a concrete, actionable fix.
 
     `abi3_upper_bound` (a minor-only version string like `"3.15"`) caps how
     far `abi3`/`abi3t` tags are exploded into concrete per-minor tags
     (`reroll.filename.abi3.explode_abi3`); `None` (the default) resolves it
     from `reroll.filename.python_latest_release.latest_python_minor`.
+
+    `allow_pre` gates whether a pre-release version (`dev`/`a`/`b`/`rc`) is
+    accepted at all; a post-release alone does not count as a pre-release.
+    This only governs the wheel's own version -- dependency version
+    specifiers are unaffected.
     """
     try:
         name, version, build, tags = parse_wheel_filename(filename)
     except InvalidWheelFilename as exc:
         logger.debug("unparseable wheel filename %r: %s", filename, exc)
+        return ()
+
+    if not allow_pre and version.is_prerelease:
+        logger.warning(
+            "rejected pre-release version %s for wheel filename %r: allow_pre is not set",
+            version,
+            filename,
+        )
         return ()
 
     tags = explode_abi3(tags, abi3_upper_bound=abi3_upper_bound)

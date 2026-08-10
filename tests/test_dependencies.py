@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 
 import pytest
+from packaging.utils import NormalizedName
 
 from reroll.dependencies import wheel_dependencies
+from reroll.dependencies.convert_dependency import UNSUPPORTED, convert_dependency
 from reroll.dependencies.python import python_dependencies
 from reroll.dependencies.requires_dist import strip_interpreter_requirements
 from reroll.filename import WheelConfig
+from reroll.name_mapping import Candidate, aggregator_mapper, static_mapper
 from reroll.wheel_metadata import WheelMetadata
 
 
@@ -29,9 +33,20 @@ def _config(*, interpreter: str = "py3", abi: str = "none") -> WheelConfig:
     )
 
 
-def _metadata(*, requires_python: str | None = None) -> WheelMetadata:
-    """A valid, minimal `WheelMetadata` with `requires_python` overridden."""
-    return WheelMetadata(name="tinylib", version="1.2.3", requires_python=requires_python)
+def _metadata(
+    *,
+    requires_python: str | None = None,
+    requires_dist: tuple[str, ...] = (),
+) -> WheelMetadata:
+    """A valid, minimal `WheelMetadata` with `requires_python`/`requires_dist`
+    overridden.
+    """
+    return WheelMetadata(
+        name="tinylib",
+        version="1.2.3",
+        requires_python=requires_python,
+        requires_dist=requires_dist,
+    )
 
 
 # --------------------------------------------------------------------------
@@ -218,19 +233,275 @@ class TestStripInterpreterRequirements:
 
 
 # --------------------------------------------------------------------------
+# `convert_dependency`: `name`, or `name<op>version[,<op>version...]`
+# --------------------------------------------------------------------------
+
+
+def _unresolved_mapper(
+    name: NormalizedName, candidates: Sequence[Candidate]
+) -> str | Sequence[Candidate]:
+    """A `NameMapper` that never resolves anything, so `map_name` always
+    ends the chain with `UnresolvedCandidates`.
+    """
+    del name
+    return candidates
+
+
+class TestConvertDependencyName:
+    def test_bare_name_maps_through_the_chain(self) -> None:
+        mappers = (static_mapper({"requests": "python-requests"}), aggregator_mapper)
+
+        assert convert_dependency("requests", mappers) == "python-requests"
+
+    def test_bare_name_with_no_mapper_opinion_falls_back_to_normalized_name(self) -> None:
+        assert convert_dependency("Requests", (aggregator_mapper,)) == "requests"
+
+    def test_versioned_dependency_maps_the_name_too(self) -> None:
+        mappers = (static_mapper({"requests": "python-requests"}), aggregator_mapper)
+
+        assert convert_dependency("requests>=2.0.0", mappers) == "python-requests >=2.0.0"
+
+    def test_unresolved_name_returns_none(self) -> None:
+        assert convert_dependency("requests", (_unresolved_mapper,)) is None
+
+    def test_unresolved_name_logs_at_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.WARNING, logger="reroll.dependencies"):
+            result = convert_dependency("requests", (_unresolved_mapper,))
+
+        assert result is None
+        assert "requests" in caplog.text
+
+
+class TestConvertDependencyOperators:
+    @pytest.mark.parametrize("operator", [">=", "<=", ">", "<", "!=", "==", "~="])
+    def test_operator_is_passed_through_as_is(self, operator: str) -> None:
+        assert (
+            convert_dependency(f"requests{operator}2.0.0", (aggregator_mapper,))
+            == f"requests {operator}2.0.0"
+        )
+
+    def test_arbitrary_equality_is_converted_to_double_equals(self) -> None:
+        assert convert_dependency("requests===2.0.0", (aggregator_mapper,)) == "requests ==2.0.0"
+
+    def test_arbitrary_equality_against_a_non_pep440_string_passes_through(self) -> None:
+        """`===` is an arbitrary *string* equality match (PEP 440), so its
+        right-hand side need not parse as a PEP 440 version at all; such a
+        value can't be checked for a local segment or a pre-release, so it
+        is passed through unchanged apart from the `===` -> `==` rewrite.
+        """
+        assert (
+            convert_dependency("requests===some-weird-string", (aggregator_mapper,))
+            == "requests ==some-weird-string"
+        )
+
+    def test_multiple_specifiers_are_joined_in_canonical_order(self) -> None:
+        assert (
+            convert_dependency("requests<=2.0.0,!=1.0.1,>=0.9", (aggregator_mapper,))
+            == "requests !=1.0.1,<=2.0.0,>=0.9"
+        )
+
+
+class TestConvertDependencyVersion:
+    def test_epoch_is_preserved(self) -> None:
+        assert convert_dependency("requests>=1!1.0.0", (aggregator_mapper,)) == "requests >=1!1.0.0"
+
+    def test_post_release_is_accepted(self) -> None:
+        assert (
+            convert_dependency("requests>=1.0.0.post1", (aggregator_mapper,))
+            == "requests >=1.0.0.post1"
+        )
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            "requests==1.0.0+local",
+            "requests!=1.0.0+local",
+            "requests===1.0.0+local",
+        ],
+    )
+    def test_rejects_a_local_version_label(self, entry: str) -> None:
+        assert convert_dependency(entry, (aggregator_mapper,)) is None
+
+    def test_local_version_label_logs_at_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.WARNING, logger="reroll.dependencies"):
+            result = convert_dependency("requests==1.0.0+local", (aggregator_mapper,))
+
+        assert result is None
+        assert "requests==1.0.0+local" in caplog.text
+
+    def test_rejects_a_direct_url_reference(self) -> None:
+        entry = "requests @ https://example.com/requests-1.0.0.whl"
+
+        assert convert_dependency(entry, (aggregator_mapper,)) is None
+
+    def test_direct_url_reference_logs_at_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        entry = "requests @ https://example.com/requests-1.0.0.whl"
+
+        with caplog.at_level(logging.WARNING, logger="reroll.dependencies"):
+            result = convert_dependency(entry, (aggregator_mapper,))
+
+        assert result is None
+        assert "requests" in caplog.text
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            "requests==1.0.0dev1",
+            "requests==1.0.0a1",
+            "requests==1.0.0b1",
+            "requests==1.0.0rc1",
+        ],
+    )
+    def test_rejects_a_pre_release_version_by_default(self, entry: str) -> None:
+        assert convert_dependency(entry, (aggregator_mapper,)) is None
+
+    def test_pre_release_version_logs_at_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.WARNING, logger="reroll.dependencies"):
+            result = convert_dependency("requests==1.0.0rc1", (aggregator_mapper,))
+
+        assert result is None
+        assert "requests==1.0.0rc1" in caplog.text
+
+    def test_allow_pre_permits_a_pre_release_version(self) -> None:
+        assert (
+            convert_dependency("requests==1.0.0rc1", (aggregator_mapper,), allow_pre=True)
+            == "requests ==1.0.0rc1"
+        )
+
+    def test_allow_pre_still_rejects_a_local_version_label(self) -> None:
+        assert (
+            convert_dependency("requests==1.0.0+local", (aggregator_mapper,), allow_pre=True)
+            is None
+        )
+
+
+class TestConvertDependencyClassification:
+    """An entry with extras or a marker is classified by `convert_dependency`
+    itself, distinctly from `None` (unrepresentable, reject the whole
+    record): extras/marker conversion is a future addition, not yet
+    implemented, so such an entry is left out of `depends` without
+    affecting the rest of the record.
+    """
+
+    def test_extras_return_the_unsupported_sentinel(self) -> None:
+        assert convert_dependency("requests[security]>=2.0.0", (aggregator_mapper,)) is UNSUPPORTED
+
+    def test_marker_returns_the_unsupported_sentinel(self) -> None:
+        entry = 'requests>=2.0.0; sys_platform == "win32"'
+
+        assert convert_dependency(entry, (aggregator_mapper,)) is UNSUPPORTED
+
+    def test_extras_and_a_marker_together_return_the_unsupported_sentinel(self) -> None:
+        entry = 'requests[security]>=2.0.0; sys_platform == "win32"'
+
+        assert convert_dependency(entry, (aggregator_mapper,)) is UNSUPPORTED
+
+    def test_unsupported_entry_is_not_confused_with_an_unresolved_name(self) -> None:
+        """The sentinel is distinct from `None` even when the name could
+        never resolve anyway -- classification happens before name mapping.
+        """
+        assert convert_dependency("requests[security]", (_unresolved_mapper,)) is UNSUPPORTED
+
+    def test_unsupported_entry_logs_at_debug_not_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG, logger="reroll.dependencies"):
+            result = convert_dependency("requests[security]>=2.0.0", (aggregator_mapper,))
+
+        assert result is UNSUPPORTED
+        assert "requests[security]>=2.0.0" in caplog.text
+        assert not any(record.levelno >= logging.WARNING for record in caplog.records)
+
+
+# --------------------------------------------------------------------------
 # `wheel_dependencies`: package entrypoint
 # --------------------------------------------------------------------------
 
 
 class TestWheelDependencies:
-    def test_delegates_to_python_dependencies(self) -> None:
+    def test_delegates_to_python_dependencies_when_requires_dist_is_empty(self) -> None:
         config = _config(interpreter="cp313", abi="cp313")
         metadata = _metadata()
 
-        assert wheel_dependencies(config, metadata) == python_dependencies(config, metadata)
+        assert wheel_dependencies(config, metadata, (aggregator_mapper,)) == python_dependencies(
+            config, metadata
+        )
 
     def test_delegates_unsolvable_result(self) -> None:
         config = _config(interpreter="cp39", abi="cp39")
         metadata = _metadata(requires_python=">=3.10")
 
-        assert wheel_dependencies(config, metadata) is None
+        assert wheel_dependencies(config, metadata, (aggregator_mapper,)) is None
+
+    def test_simple_requires_dist_entries_come_before_python(self) -> None:
+        """Matches the field order real conda-pypi output uses (§3.5 of
+        `specs/wheel_dependency_conversion.md`): dependency entries first,
+        `python` last.
+        """
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(requires_dist=("requests>=2.0.0",))
+
+        assert wheel_dependencies(config, metadata, (aggregator_mapper,)) == (
+            "requests >=2.0.0",
+            "python >=3.0",
+        )
+
+    def test_multiple_requires_dist_entries_keep_their_order(self) -> None:
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(requires_dist=("requests>=2.0.0", "click==8.*"))
+
+        assert wheel_dependencies(config, metadata, (aggregator_mapper,)) == (
+            "requests >=2.0.0",
+            "click ==8.*",
+            "python >=3.0",
+        )
+
+    def test_strips_bare_interpreter_requirements_before_conversion(self) -> None:
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(requires_dist=("python>=3.9", "requests>=2.0.0"))
+
+        assert wheel_dependencies(config, metadata, (aggregator_mapper,)) == (
+            "requests >=2.0.0",
+            "python >=3.0",
+        )
+
+    def test_skips_an_entry_with_extras(self) -> None:
+        """Extras conversion is not yet implemented (a future marker/extras
+        followup); such an entry is left out of `depends` for now rather
+        than rejecting the whole record.
+        """
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(requires_dist=("requests[security]>=2.0.0",))
+
+        assert wheel_dependencies(config, metadata, (aggregator_mapper,)) == ("python >=3.0",)
+
+    def test_skips_an_entry_with_a_marker(self) -> None:
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(requires_dist=('requests>=2.0.0; sys_platform == "win32"',))
+
+        assert wheel_dependencies(config, metadata, (aggregator_mapper,)) == ("python >=3.0",)
+
+    def test_rejects_the_whole_record_for_an_unrepresentable_entry(self) -> None:
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(requires_dist=("requests==1.0.0+local",))
+
+        assert wheel_dependencies(config, metadata, (aggregator_mapper,)) is None
+
+    def test_uses_mappers_to_convert_dependency_names(self) -> None:
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(requires_dist=("requests>=2.0.0",))
+        mappers = (static_mapper({"requests": "python-requests"}), aggregator_mapper)
+
+        assert wheel_dependencies(config, metadata, mappers) == (
+            "python-requests >=2.0.0",
+            "python >=3.0",
+        )
+
+    def test_allow_pre_is_passed_through_to_requires_dist_conversion(self) -> None:
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(requires_dist=("requests==1.0.0rc1",))
+
+        assert wheel_dependencies(config, metadata, (aggregator_mapper,), allow_pre=True) == (
+            "requests ==1.0.0rc1",
+            "python >=3.0",
+        )

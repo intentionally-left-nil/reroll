@@ -26,6 +26,7 @@ Moving from PyPI to conda via reroll is a new codepath, rather than an exact dup
   * For some wheels, multiple configs will be returned (which will eventually map to multiple repodata entries). Compressed tag expansion and platform tag expansion are the most common reasons for this. Reroll will prefer resolver correctness and simplicity over repodata terseness by emitting multiple entries to the same wheel
 * The filename code will explode out, and de-duplicate `abi3` and `abi3t` tags to concrete versions of python
 * Reroll will use https://endoflife.date/api/v1/products/python/ to get the upper-bound of python when none is provided
+* A package version may only contain pre-release tags (dev/devN/alpha/beta/rc) if the `allow_pre` setting is true. Otherwise, the version will be rejected, and log file message emitted
 
 
 # Reading material
@@ -58,7 +59,10 @@ For example, `1.2.3.a1` is the normalized version of `1.2.3.alpha1`
 Beyond the specification, pip used to have relaxed requirements around the wheel regex, which was then enforced starting in pip 25.3: https://github.com/pypa/pip/issues/12938
 
 What this means in practice is that there are potentially old wheels which old versions of pip would install, but not new versions of pip.
-Note that some of these differences in behavior apply to other fields, but the version is one of the main ones that caused old wheels to fail current validation
+Note that some of these differences in behavior apply to other fields, but the version is one of the main ones that caused old wheels to fail current validation.
+
+Reroll is deliberately more restrictive than the pypi spec when it comes to pre-releases, due to the nature of how `pip install --pre` works compared to conda. Instead, pre-release versions are disallowed by default,
+and only permitted with the `allow_pre` flag. See [wheel_to_conda_dependencies](./wheel_to_conda_dependencies.md#pre-release) for details
 
 # Build tag
 The build tag must start with a number, then it can be any unicode string except a hyphen `-`. In practice, this string is probably still ascii restricted. The only purpose of the build tags is to break ties when the wheels are otherwise identical in terms of matching. From the spec:

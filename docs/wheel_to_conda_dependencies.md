@@ -3,6 +3,8 @@
 * The conda ecosystem doesn't prevent ABI breakages of e.g. pypy before `python_abi` was introduced, so the wheel work will not try to prevent ABI breakages whene `python_abi` is unsupported
 * Expand out abi3 and abi3t into multiple repodata entries, rather than relying on `python-gil`
 * Reroll must silently strip out (but not error) any `Requires-Dist: Python ...` dependency (direct dependency on python, not a marker) for python and all related interpreters (python, cpython, pypy, graalpy)
+* `Requires-Dist` dependencies which contain local tags, direct URL's, or pre-release tags are invalid, and cause reroll to stop processing the entire repodata entry
+* An extra flag `allow_pre` is passed into the wheel_dependencies function. If true, then pre-release tags (dev, devN, alpha, beta, rc and their short-forms) are permitted, and are passed through as a valid dependency specifier
 
 # Calculating the conda specifiers for python
 Since wheels were built and installed in the pypi ecosystem, we generally want the conda equivalent to match the real-world environments that pypi would have created.
@@ -120,3 +122,53 @@ This is fully described [wheel_filename.md](./wheel_filename.md#python-tag), but
 
 # Handling Requires-Dist for python versions
 On the pypi side, technically a Requires-Dist requirement of `python` is not spec-rejecting. However, pypi won't let someone name squat the `python` package, so this is moot. However, on the conda side, you _can_ download python, so if a wheel specified python as a dependency in the wrong place, this would otherwise map cleanly. We should solve this by removing any interpreter from the requirements list. This includes: `python`, `cpython`, `pypy`, and `graalpy`. None of these are valid pypy packages.
+
+
+# Simple dependency conversion
+The main format of a simple dependency is name-operator-version. If the operator is missing, it is identical to name == version.
+Generally speaking, names will go through the name converter, operators will go into Matchspec as-is to do the conversion, and the version needs to be thought through
+
+Dependency names are converted from pypi names to conda names using the same conversion mechanism as the main filename. Failures to convert stops repodata generation with a log output.
+
+## Operator conversion
+The operator can be passed as-is. Conda's matchspec understands PEP-440 style strings. There are only two specific examples worth calling out
+
+First, the `~=` syntax historically was not well-supported via conda. This was properly fixed in [Conda 4.9](https://docs.conda.io/projects/conda/en/latest/release-notes.html#id307)
+So, although traditional conda recipes might have exanded `~=` into >= and < ranges, there is no need for our code to do so.
+
+Secondly, triple equals `===` means different things for PyPI vs Conda. For pypi, triple equals is almost like an escape hatch. It means "do an exact string comparison, don't worry about any details about the format". This is to handle things like local tags, url's or other oddities.
+Conda, on the other hand doesn't have any notion of an exact string match. `==` or `no operator` are prefix-based matches. So, only the beginning has to match, and the rest can diverge.
+
+The `===` is very rare in pypi, so in some regards it doesn't matter too much what we do with it. However, by default conda's matchspec will parse `===` and treat it as `==`, so we will continue observing the same behavior and emit `==`.
+
+
+## Version conversion
+Pip supports more tweaks on the version than conda natively supports. This includes:
+* epochs - `package 1!1.0`
+* local tags - `package 1.0.0+awesome`
+* direct URL's - `package @ https://example.com`
+* Pre-releases - `package 1.0.0rc1`
+
+Epochs are allowed. They are supported by matchspec, and are properly parsed by rattler and other clients.
+
+Some of these we can dismiss out of hand. Dependencies with direct URL's are to be reject out-of-hand. It shouldn't occur and it's natural to emit an log item and stop processing the wheel when this happens. Presumably the author is deliberately trying to access another registry,
+but that wouldn't know anything about conda and also it's a security risk. Rejecting the entire wheel, rather than silently stripping the URL brings visibility to the problem.
+
+
+Local tags are by-design not intended to be uploaded to a repository. PyPI will not allow a package with a local tag to be uploaded. That also means that if a package has a `Requires-Dist: package 1.0.0+awesome`, this would never be able to resolve from a wheel on PyPI.
+Therefore, we can also reject local tags.
+
+### Pre-release
+Pre-releases are different, in that they are valid specifications in both pypi and conda. The problem is that pip will not install pre-releases without `--pre` or a specific requirement for an exact pre-release (alpha/beta/rc) version. So `pip install mypackage=1.0.0` will not pick up `package 1.0.0rc1` even if present in the registry.
+
+Conda doesn't have this support, but the pre-release would be a lower-priority match. So, given a conda version of `1.0.0` and `1.0.0.rc2` with a specifier match of `mypackage==1` or `mypackage==1.0.0` it would prefer the non-rc candidate. The only time an RC candidate would be picked up would be when the production version does not exist. Unfortunately... the whole point of a pre-release is exactly that (to release something before the final version exists). The conda solution is to add labels (which essentially act as micro-channels). So the default label would have the main release, and a `dev` label would have the prerelease.
+
+Even in this label case, the label is not part of the dependency specification. There's no conda way to specify `mypackage/label/dev::mypackage==1.0.0.rc2` in order to get an rc package.
+
+Therefore, putting all this together leads to a strong reason to reject alpha suffixes in releases. It would probably be okay to strip them, under the assumption that the code in a final release trumps a release candidate. However, for the sake of clarity, clear failure cases (rather than hidden changes), it's better to initially reject such dependencies, see if it actually occurs, and adjust from there.
+
+To mimic the concept of labels, a repodata author might intend for a certain channel to contain -alpha, -beta, -rc packages in it. In this case an `allow_pre` flag can toggle this behavior
+One final note is that `allow_pre` will apply equally to both package versions, as well as version dependencies. This keeps things consistent (channels can either have pre-release packages and rely on other pre-release packages, or they can't)
+
+### Post-release
+Post releases are fine, however, because they are intended to take priority over an existing wheel. So, any pypi dependency like `mypackage 1.0.0.post1` is accepted, (and the package with that release would also be accepted by the filename command)

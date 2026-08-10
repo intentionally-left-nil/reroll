@@ -445,6 +445,35 @@ class TestRequiresPython:
                 )
             )
 
+    def test_non_contiguous_minor_range_is_rejected(self) -> None:
+        """`!=3.9.*` carves a hole out of an otherwise-open range -- a shape
+        no real `Requires-Python` value uses in practice, and one that
+        `reroll.dependencies` has no way to intersect with a wheel's
+        filename-implied range. Rejected outright (same as any other
+        `Requires-Python` shape reroll doesn't support) rather than
+        silently dropped.
+        """
+        with pytest.raises(ValidationError):
+            parse_metadata(
+                _text(
+                    "Metadata-Version: 2.1",
+                    "Name: tinylib",
+                    "Version: 1.0",
+                    "Requires-Python: >=3.8,!=3.9.*,<3.12",
+                )
+            )
+
+    def test_unsatisfiable_range_is_rejected(self) -> None:
+        with pytest.raises(ValidationError):
+            parse_metadata(
+                _text(
+                    "Metadata-Version: 2.1",
+                    "Name: tinylib",
+                    "Version: 1.0",
+                    "Requires-Python: <3.0",
+                )
+            )
+
 
 # --------------------------------------------------------------------------
 # `requires_dist`

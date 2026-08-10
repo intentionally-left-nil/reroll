@@ -11,6 +11,7 @@ from packaging.utils import canonicalize_name
 from pydantic import AfterValidator, BaseModel, ConfigDict, field_validator
 
 from reroll.filename.py_version import PyVersion
+from reroll.filename.python_requirement import minor_range
 from reroll.lenient_parser import parse_lenient_requirement, parse_lenient_version_specifiers
 
 _LICENSE_CLASSIFIER_PREFIX = "License :: "
@@ -78,9 +79,18 @@ class WheelMetadata(BaseModel):
     @field_validator("requires_python")
     @classmethod
     def _validate_requires_python(cls, value: str | None) -> str | None:
+        """`None` is passed through unchanged; otherwise the value must
+        parse as a PEP 440 specifier set (leniently, like `requires_dist`)
+        *and* imply a contiguous Python 3 minor range (`minor_range`) --
+        `reroll.dependencies` intersects this against a wheel's
+        filename-implied range, which only a single contiguous range
+        supports.
+        """
         if value is None:
             return None
-        return str(parse_lenient_version_specifiers(value))
+        specifiers = parse_lenient_version_specifiers(value)
+        minor_range(specifiers)
+        return str(specifiers)
 
     @field_validator("requires_dist")
     @classmethod

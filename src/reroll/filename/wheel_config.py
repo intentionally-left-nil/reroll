@@ -63,11 +63,20 @@ class WheelConfig(BaseModel):
     @classmethod
     def _validate_abi(cls, value: str) -> str:
         """Validate, then normalize: `parse_abi` raises on a `d` suffix or
-        any other unsupported shape, and `normalize_abi` strips the
+        any other unsupported shape. A `WheelConfig` is the terminal,
+        concrete form of one wheel tag, so a `STABLE`-kind ABI (`abi3`/
+        `abi3t`) is rejected outright -- it must already have been exploded
+        into concrete per-minor ABIs (`reroll.filename.abi3.explode_abi3`)
+        before reaching this constructor. `normalize_abi` strips the
         harmless `m`/`u` suffixes so the stored (and eventually emitted)
         `abi` tag never carries them.
         """
-        parse_abi(value)
+        info = parse_abi(value)
+        if info.kind is AbiKind.STABLE:
+            raise ValueError(
+                f"abi3/abi3t must be exploded into concrete per-minor ABIs before "
+                f"constructing a WheelConfig, got {value!r}"
+            )
         return normalize_abi(value)
 
     @model_validator(mode="after")
@@ -93,8 +102,6 @@ class WheelConfig(BaseModel):
         """The Python constraint this tag implies."""
         prefix, _, interp_minor = parse_interpreter(self.interpreter)
         abi_info = parse_abi(self.abi)
-        if abi_info.kind is AbiKind.STABLE:
-            return PythonRequirement.floor(interp_minor)
         if abi_info.kind is AbiKind.VERSIONED:
             return PythonRequirement.pinned(interp_minor)
         # NONE: the interpreter prefix decides. `py*` tags are floors --

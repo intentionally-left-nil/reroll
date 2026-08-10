@@ -11,6 +11,7 @@ import logging
 from packaging.utils import InvalidWheelFilename, parse_wheel_filename
 from pydantic import ValidationError
 
+from reroll.filename.abi3 import explode_abi3
 from reroll.filename.enums import AbiKind, Arch, PlatformFamily
 from reroll.filename.platform import supported_archs
 from reroll.filename.python_requirement import PythonRequirement
@@ -30,7 +31,9 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 
-def parse_filename(filename: str, mappers: NameMappers) -> tuple[WheelConfig, ...]:
+def parse_filename(
+    filename: str, mappers: NameMappers, *, abi3_upper_bound: str | None = None
+) -> tuple[WheelConfig, ...]:
     """Parse a wheel filename into zero or more `WheelConfig`s.
 
     Never raises for filename input: an unparseable filename or a filename
@@ -38,12 +41,19 @@ def parse_filename(filename: str, mappers: NameMappers) -> tuple[WheelConfig, ..
     reason is logged at `DEBUG`. A mapper chain that raises
     `UnresolvedCandidates` also yields `()`, but is logged at `WARNING`
     since (unlike the other rejections) it has a concrete, actionable fix
+
+    `abi3_upper_bound` (a minor-only version string like `"3.15"`) caps how
+    far `abi3`/`abi3t` tags are exploded into concrete per-minor tags
+    (`reroll.filename.abi3.explode_abi3`); `None` (the default) resolves it
+    from `reroll.filename.python_latest_release.latest_python_minor`.
     """
     try:
         name, version, build, tags = parse_wheel_filename(filename)
     except InvalidWheelFilename as exc:
         logger.debug("unparseable wheel filename %r: %s", filename, exc)
         return ()
+
+    tags = explode_abi3(tags, abi3_upper_bound=abi3_upper_bound)
 
     # The name is tag-invariant, so this is resolved once,
     # before the tag loop below -- not once per `(tag, arch)` combination.

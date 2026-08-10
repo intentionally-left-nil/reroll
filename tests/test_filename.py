@@ -9,6 +9,7 @@ from typing import cast
 
 import pytest
 from packaging.specifiers import SpecifierSet
+from packaging.tags import Tag
 from packaging.utils import NormalizedName
 from packaging.version import Version
 from pydantic import ValidationError
@@ -22,6 +23,7 @@ from reroll.filename import (
     parse_filename,
     supported_archs,
 )
+from reroll.filename.abi3 import explode_abi3
 from reroll.name_mapping import (
     Candidate,
     NameMappers,
@@ -110,29 +112,31 @@ class TestInterpreterValidator:
 # Python 3.0-3.3 was never shipped on defaults or conda-forge. A `cp` tag
 # paired with `none` or a matching versioned ABI *pins* that minor exactly,
 # so it's unsupported below 3.4 -- no python 3.0-3.3 build exists to pin to.
-# `abi3` is different: it *loosens* the tag to a floor, and PEP 384
-# introduced the stable ABI at 3.2, so `cp32-abi3`/`cp33-abi3` are legal
-# floors that resolve up to whatever 3.4+ is actually available. Below
-# abi3's own 3.2 floor (`cp30-abi3`, `cp31-abi3`) is still dropped, as a
-# "strong suggestion the filename is bogus" per the doc. A generic `py*`
-# tag is a pure floor with no tie to a real interpreter at all, so it's
-# unaffected by any of this -- `py32` is fine even though python 3.2
-# itself doesn't exist on those channels.
+#
+# `abi3`/`abi3t` rows are covered separately: `WheelConfig` itself never
+# accepts a raw `abi3`/`abi3t` tag at all (see `TestAbiValidator`) -- that
+# ABI kind must already have been exploded into concrete per-minor tags by
+# `explode_abi3` before reaching a `WheelConfig`, so the floor-legality
+# table for `abi3`/`abi3t` (PEP 384's 3.2 floor, PEP 803's 3.15 floor) is
+# tested against `explode_abi3` directly, in `TestAbi3FloorIsPoint2` near
+# `TestExplodeAbi3`. A generic `py*` tag is a pure floor with no tie to a
+# real interpreter at all, so it's unaffected by any of this -- `py32` is
+# fine even though python 3.2 itself doesn't exist on those channels.
 # --------------------------------------------------------------------------
 
 
 class TestPythonVersionFloorTable:
-    """Every row of the doc's table, tested verbatim."""
+    """Every `none`/versioned-ABI row of the doc's table, tested verbatim
+    (the `abi3`/`abi3t` rows live in `TestAbi3FloorIsPoint2` instead).
+    """
 
     @pytest.mark.parametrize(
         ("interpreter", "abi"),
         [
             ("py3", "none"),
             ("py32", "none"),
-            ("cp32", "abi3"),
-            ("cp33", "abi3"),
         ],
-        ids=["py3-none", "py32-none", "cp32-abi3", "cp33-abi3"],
+        ids=["py3-none", "py32-none"],
     )
     def test_allowed(self, interpreter: str, abi: str) -> None:
         _config(interpreter=interpreter, abi=abi)
@@ -161,6 +165,12 @@ class TestPythonVersionFloorTable:
         ],
     )
     def test_disallowed(self, interpreter: str, abi: str) -> None:
+        """The `abi3` rows here are disallowed by the blanket
+        `WheelConfig` rejection of any raw `abi3`/`abi3t` tag (regardless of
+        interpreter) -- not by the floor logic `TestAbi3FloorIsPoint2`
+        exercises against `explode_abi3`. Both routes land on the same
+        `ValidationError`.
+        """
         with pytest.raises(ValidationError):
             _config(interpreter=interpreter, abi=abi)
 
@@ -168,8 +178,9 @@ class TestPythonVersionFloorTable:
 class TestCpythonBelow34Rejected:
     """Beyond the table's `cp32`/`cp3` rows: the `< 3.4` restriction applies
     to *any* minor below 4 when the tag pins an exact version (`none` or a
-    matching versioned ABI). `abi3`'s own (lower, 3.2) floor is covered
-    separately by `TestPythonVersionFloorTable` and `TestAbi3FloorIsPoint2`.
+    matching versioned ABI). `abi3`'s own (lower, 3.2) floor is a property
+    of `explode_abi3`, covered by `TestAbi3FloorIsPoint2` near
+    `TestExplodeAbi3`.
     """
 
     @pytest.mark.parametrize("minor", [0, 1, 2, 3])
@@ -184,32 +195,10 @@ class TestCpythonBelow34Rejected:
 
     def test_3_4_itself_is_the_floor_for_none_and_versioned_pins(self) -> None:
         """3.4 is explicitly allowed ('less than 3.4' is the cutoff) for the
-        two *exact-pin* shapes -- `abi3`'s own (lower) floor is tested in
-        `TestAbi3FloorIsPoint2`.
+        two *exact-pin* shapes.
         """
         _config(interpreter="cp34", abi="none")
         _config(interpreter="cp34", abi="cp34")
-
-
-class TestAbi3FloorIsPoint2:
-    """`abi3` (PEP 384) is a floor, not a pin, and was introduced at Python
-    3.2 -- one minor *below* the 3.4 cutoff that applies to `none`/matching
-    versioned ABIs. `abi3t` is unaffected: its own floor (3.15) is well
-    above either number.
-    """
-
-    @pytest.mark.parametrize("minor", [0, 1])
-    def test_rejects_below_its_own_floor(self, minor: int) -> None:
-        with pytest.raises(ValidationError):
-            _config(interpreter=f"cp3{minor}", abi="abi3")
-
-    @pytest.mark.parametrize("minor", [2, 3, 4, 13])
-    def test_accepts_at_or_above_its_own_floor(self, minor: int) -> None:
-        _config(interpreter=f"cp3{minor}", abi="abi3")
-
-    def test_abi3t_floor_is_unaffected_and_still_15(self) -> None:
-        with pytest.raises(ValidationError):
-            _config(interpreter="cp33", abi="abi3t")
 
 
 # --------------------------------------------------------------------------
@@ -222,8 +211,18 @@ class TestAbiValidator:
         assert _config(abi="none").abi == "none"
 
     @pytest.mark.parametrize(("interpreter", "abi"), [("cp313", "abi3"), ("cp315", "abi3t")])
-    def test_accepts_abi3_variants(self, interpreter: str, abi: str) -> None:
-        assert _config(interpreter=interpreter, abi=abi).abi == abi
+    def test_rejects_abi3_and_abi3t_directly(self, interpreter: str, abi: str) -> None:
+        """A `WheelConfig` is the terminal, concrete form of one wheel tag
+        -- `abi3`/`abi3t` are inherently non-terminal (a promise spanning
+        many minors), so they must already have been exploded into concrete
+        `cp3Y-cp3Y[t]` tags by `explode_abi3` before a `WheelConfig` is ever
+        constructed. This holds regardless of whether the interpreter+ABI
+        pairing would otherwise be a *legal* `abi3`/`abi3t` combination --
+        that floor-legality question belongs to `explode_abi3`
+        (`TestAbi3FloorIsPoint2`), not to `WheelConfig`.
+        """
+        with pytest.raises(ValidationError):
+            _config(interpreter=interpreter, abi=abi)
 
     @pytest.mark.parametrize("abi", ["cp313", "cp313t"])
     def test_accepts_versioned_cpython_abi(self, abi: str) -> None:
@@ -432,12 +431,6 @@ class TestInterpreterAbiPairing:
     def test_cp_with_matching_free_threaded_abi_is_legal(self) -> None:
         _config(interpreter="cp314", abi="cp314t")
 
-    def test_cp_with_abi3_is_legal(self) -> None:
-        _config(interpreter="cp313", abi="abi3")
-
-    def test_cp_with_abi3t_is_legal_when_minor_at_least_15(self) -> None:
-        _config(interpreter="cp315", abi="abi3t")
-
     @pytest.mark.parametrize("abi", ["abi3", "cp313", "cp313t"])
     def test_rejects_generic_interpreter_with_non_none_abi(self, abi: str) -> None:
         with pytest.raises(ValidationError):
@@ -447,12 +440,17 @@ class TestInterpreterAbiPairing:
         with pytest.raises(ValidationError):
             _config(interpreter="cp313", abi="cp312")
 
-    def test_rejects_abi3_below_3_2(self) -> None:
-        """See `TestAbi3FloorIsPoint2` for the full boundary matrix."""
+    def test_rejects_abi3_regardless_of_floor(self) -> None:
+        """A raw `abi3` tag is always rejected by `WheelConfig`
+        (`TestAbiValidator.test_rejects_abi3_and_abi3t_directly`) --
+        `cp31-abi3` is doubly invalid: below `abi3`'s own 3.2 floor
+        (`TestAbi3FloorIsPoint2`, tested against `explode_abi3`) *and*
+        never a legal `WheelConfig` input at all.
+        """
         with pytest.raises(ValidationError):
             _config(interpreter="cp31", abi="abi3")
 
-    def test_rejects_abi3t_below_3_15(self) -> None:
+    def test_rejects_abi3t_regardless_of_floor(self) -> None:
         with pytest.raises(ValidationError):
             _config(interpreter="cp310", abi="abi3t")
 
@@ -486,6 +484,11 @@ class TestArchMembership:
 
 
 class TestDerivedPythonAndAbiFields:
+    """`abi3`/`abi3t` rows are excluded here: `WheelConfig` never accepts a
+    raw `abi3`/`abi3t` tag (`TestAbiValidator`), so `AbiKind.STABLE` can
+    never be a valid instance's `abi_kind`.
+    """
+
     @pytest.mark.parametrize(
         ("interpreter", "abi", "minor", "exact", "abi_kind", "free_threaded"),
         [
@@ -495,8 +498,6 @@ class TestDerivedPythonAndAbiFields:
             ("cp313", "none", 13, True, AbiKind.NONE, False),
             ("cp313", "cp313", 13, True, AbiKind.VERSIONED, False),
             ("cp314", "cp314t", 14, True, AbiKind.VERSIONED, True),
-            ("cp313", "abi3", 13, False, AbiKind.STABLE, False),
-            ("cp315", "abi3t", 15, False, AbiKind.STABLE, True),
         ],
     )
     def test_table(
@@ -638,6 +639,195 @@ class TestNameAndVersionCoercion:
 
 
 # --------------------------------------------------------------------------
+# ABI explosion: `explode_abi3` (docs/wheel_filename.md: "ABI explosion")
+#
+# `abi3`/`abi3t` are not themselves installable tags -- they are a promise
+# ("compatible with every later minor") that has to be made concrete before
+# a `WheelConfig` can express a Python constraint. `explode_abi3` turns one
+# `cp3X-abi3-*` tag into one `cp3Y-cp3Y-*` tag per minor from `X` up through
+# a caller-supplied ceiling, since nothing in the filename itself carries an
+# upper bound. Before exploding, it also checks that `(interpreter, abi)` is
+# itself a legal pairing (via `check_interpreter_abi`) -- a tag that fails
+# this check is left alone rather than exploded, since a `WheelConfig` never
+# accepts a raw `abi3`/`abi3t` tag (`TestAbiValidator`) and will reject it.
+# --------------------------------------------------------------------------
+
+
+def _tag(interpreter: str, abi: str, platform: str = "manylinux_2_17_x86_64") -> Tag:
+    return Tag(interpreter, abi, platform)
+
+
+class TestExplodeAbi3:
+    def test_non_abi3_tags_are_returned_unchanged(self) -> None:
+        tags = {_tag("cp313", "cp313"), _tag("py3", "none", "any")}
+
+        assert explode_abi3(tags, abi3_upper_bound="3.13") == frozenset(tags)
+
+    def test_expands_cp_abi3_across_the_full_range(self) -> None:
+        result = explode_abi3({_tag("cp39", "abi3")}, abi3_upper_bound="3.11")
+
+        assert result == {
+            _tag("cp39", "cp39"),
+            _tag("cp310", "cp310"),
+            _tag("cp311", "cp311"),
+        }
+
+    def test_original_abi3_tag_is_not_itself_in_the_result(self) -> None:
+        result = explode_abi3({_tag("cp39", "abi3")}, abi3_upper_bound="3.9")
+
+        assert _tag("cp39", "abi3") not in result
+
+    def test_abi3t_expands_to_a_free_threaded_abi_per_minor(self) -> None:
+        result = explode_abi3({_tag("cp315", "abi3t")}, abi3_upper_bound="3.16")
+
+        assert result == {
+            _tag("cp315", "cp315t"),
+            _tag("cp316", "cp316t"),
+        }
+
+    def test_platform_is_preserved_on_every_generated_variant(self) -> None:
+        result = explode_abi3({_tag("cp313", "abi3", "win_amd64")}, abi3_upper_bound="3.14")
+
+        assert all(tag.platform == "win_amd64" for tag in result)
+
+    def test_floor_above_upper_bound_drops_the_tag_entirely(self) -> None:
+        result = explode_abi3({_tag("cp316", "abi3")}, abi3_upper_bound="3.15")
+
+        assert result == frozenset()
+
+    def test_single_minor_range_when_floor_equals_upper_bound(self) -> None:
+        result = explode_abi3({_tag("cp313", "abi3")}, abi3_upper_bound="3.13")
+
+        assert result == {_tag("cp313", "cp313")}
+
+    def test_deduplicates_against_a_tag_already_present(self) -> None:
+        result = explode_abi3(
+            {_tag("cp39", "abi3"), _tag("cp310", "cp310")}, abi3_upper_bound="3.10"
+        )
+
+        assert result == {_tag("cp39", "cp39"), _tag("cp310", "cp310")}
+
+    def test_deduplicates_overlapping_ranges_from_two_abi3_tags(self) -> None:
+        """Compressed-tag expansion (`cp39.cp310-abi3-*`) hands `explode_abi3`
+        two separate input tags whose exploded ranges overlap at `cp310`;
+        the overlap must collapse to one tag, not two.
+        """
+        result = explode_abi3(
+            {_tag("cp39", "abi3"), _tag("cp310", "abi3")}, abi3_upper_bound="3.10"
+        )
+
+        assert result == {_tag("cp39", "cp39"), _tag("cp310", "cp310")}
+
+    @pytest.mark.parametrize("interpreter", ["py38", "cp3", "cp40"])
+    def test_leaves_non_cp3x_interpreters_paired_with_abi3_unchanged(
+        self, interpreter: str
+    ) -> None:
+        """These pairings are already invalid (checked by
+        `check_interpreter_abi`, via a bad interpreter shape rather than a
+        floor); explosion must not silently drop them -- leaving the tag
+        alone lets `WheelConfig` reject and log it, exactly as it would with
+        no explosion involved at all.
+        """
+        tag = _tag(interpreter, "abi3")
+
+        assert explode_abi3({tag}, abi3_upper_bound="3.13") == {tag}
+
+    def test_legal_low_floor_is_exploded_and_then_cleaned_up_downstream(self) -> None:
+        """`cp32-abi3` is a *legal* pairing (`TestAbi3FloorIsPoint2`), so
+        `explode_abi3` explodes it in full -- `cp32/cp32` and `cp33/cp33`
+        are only invalid on a *different* ground (CPython < 3.4, enforced
+        by `WheelConfig` itself), which `explode_abi3` does not need to
+        know about.
+        """
+        result = explode_abi3({_tag("cp32", "abi3")}, abi3_upper_bound="3.6")
+
+        assert result == {
+            _tag("cp32", "cp32"),
+            _tag("cp33", "cp33"),
+            _tag("cp34", "cp34"),
+            _tag("cp35", "cp35"),
+            _tag("cp36", "cp36"),
+        }
+
+    def test_does_not_resolve_a_default_upper_bound_when_no_abi3_tag_is_present(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _fail() -> int:
+            raise AssertionError("must not look up a default when nothing needs exploding")
+
+        monkeypatch.setattr("reroll.filename.abi3.latest_python_minor", _fail)
+
+        tags = {_tag("cp313", "cp313")}
+        assert explode_abi3(tags, abi3_upper_bound=None) == frozenset(tags)
+
+    def test_none_upper_bound_uses_the_default_lookup(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("reroll.filename.abi3.latest_python_minor", lambda: 11)
+
+        result = explode_abi3({_tag("cp39", "abi3")}, abi3_upper_bound=None)
+
+        assert result == {
+            _tag("cp39", "cp39"),
+            _tag("cp310", "cp310"),
+            _tag("cp311", "cp311"),
+        }
+
+    @pytest.mark.parametrize("upper_bound", ["3.15.3", "15", "abc", "3.", "3"])
+    def test_rejects_malformed_upper_bound(self, upper_bound: str) -> None:
+        with pytest.raises(ValueError, match="abi3_upper_bound"):
+            explode_abi3({_tag("cp39", "abi3")}, abi3_upper_bound=upper_bound)
+
+
+# --------------------------------------------------------------------------
+# `explode_abi3`'s floor-legality pre-check (docs/wheel_filename.md: "Python
+# Tag | abi tag | Allowed" table's `abi3` rows, plus `abi3t`'s own floor).
+#
+# `abi3` (PEP 384) is a floor, not a pin, introduced at Python 3.2. `abi3t`
+# (PEP 803) has a much higher floor: 3.15. A tag below its ABI's own floor
+# is illegitimate on its own terms -- not merely narrowed by some other
+# rule -- so `explode_abi3` must reject it *before* exploding, via
+# `check_interpreter_abi`, rather than exploding it and hoping a later
+# check (e.g. `WheelConfig`'s `< 3.4` rule) happens to clean it up. That
+# hope holds for plain `abi3` (2 < 4, so the low end is always caught
+# anyway) but not for `abi3t`: nothing else in `WheelConfig` enforces a
+# free-threading-specific floor, so a `cp310-abi3t` tag left unchecked
+# would incorrectly explode into "valid-looking" free-threaded 3.10
+# configs that don't correspond to any real CPython build.
+# --------------------------------------------------------------------------
+
+
+class TestAbi3FloorIsPoint2:
+    @pytest.mark.parametrize("minor", [0, 1])
+    def test_abi3_below_its_own_floor_is_left_unexploded(self, minor: int) -> None:
+        tag = _tag(f"cp3{minor}", "abi3")
+
+        assert explode_abi3({tag}, abi3_upper_bound="3.13") == {tag}
+
+    @pytest.mark.parametrize("minor", [2, 3, 4, 13])
+    def test_abi3_at_or_above_its_own_floor_is_exploded(self, minor: int) -> None:
+        result = explode_abi3({_tag(f"cp3{minor}", "abi3")}, abi3_upper_bound=f"3.{minor}")
+
+        assert result == {_tag(f"cp3{minor}", f"cp3{minor}")}
+
+    @pytest.mark.parametrize("minor", [0, 1, 13, 14])
+    def test_abi3t_below_its_own_much_higher_floor_is_left_unexploded(self, minor: int) -> None:
+        """`minor=13`/`14` is the important case here, not `0`/`1`: those
+        are close enough to `abi3t`'s real 3.15 floor that a bug which only
+        checks "is this a `cp3<digits>` interpreter" (rather than the
+        floor itself) would not catch them.
+        """
+        tag = _tag(f"cp3{minor}", "abi3t")
+
+        assert explode_abi3({tag}, abi3_upper_bound="3.16") == {tag}
+
+    def test_abi3t_at_its_own_floor_is_exploded(self) -> None:
+        result = explode_abi3({_tag("cp315", "abi3t")}, abi3_upper_bound="3.15")
+
+        assert result == {_tag("cp315", "cp315t")}
+
+
+# --------------------------------------------------------------------------
 # `parse_filename` orchestration
 # --------------------------------------------------------------------------
 
@@ -747,6 +937,117 @@ class TestParseFilename:
         )
 
         assert {c.interpreter for c in configs} == {"py3", "cp313"}
+
+
+# --------------------------------------------------------------------------
+# `parse_filename` <-> ABI explosion
+# --------------------------------------------------------------------------
+
+
+class TestParseFilenameAbi3Explosion:
+    def test_abi3_wheel_explodes_into_one_config_per_minor(self) -> None:
+        configs = parse_filename(
+            "tinylib-1.2.3-cp39-abi3-manylinux_2_17_x86_64.whl",
+            mappers=(aggregator_mapper,),
+            abi3_upper_bound="3.11",
+        )
+
+        assert {(c.interpreter, c.abi) for c in configs} == {
+            ("cp39", "cp39"),
+            ("cp310", "cp310"),
+            ("cp311", "cp311"),
+        }
+
+    def test_abi3t_wheel_explodes_with_the_free_threaded_abi(self) -> None:
+        configs = parse_filename(
+            "tinylib-1.2.3-cp315-abi3t-manylinux_2_17_x86_64.whl",
+            mappers=(aggregator_mapper,),
+            abi3_upper_bound="3.16",
+        )
+
+        assert {(c.interpreter, c.abi) for c in configs} == {
+            ("cp315", "cp315t"),
+            ("cp316", "cp316t"),
+        }
+
+    def test_low_floor_abi3_only_yields_configs_from_3_4_upward(self) -> None:
+        """End-to-end version of `TestExplodeAbi3`'s low-floor case: the
+        sub-3.4 exploded tags are real `WheelConfig` rejections, not just
+        absent from `explode_abi3`'s own output.
+        """
+        configs = parse_filename(
+            "tinylib-1.2.3-cp32-abi3-manylinux_2_17_x86_64.whl",
+            mappers=(aggregator_mapper,),
+            abi3_upper_bound="3.5",
+        )
+
+        assert {c.interpreter for c in configs} == {"cp34", "cp35"}
+
+    def test_below_abi3s_own_floor_is_dropped_entirely_not_salvaged(self) -> None:
+        """docs/wheel_filename.md: a tag below `abi3`'s own 3.2 floor is
+        dropped "as a strong suggestion the filename is bogus" -- it must
+        not be exploded and then partially rescued by the unrelated `< 3.4`
+        rule the way `cp32-abi3` is.
+        """
+        configs = parse_filename(
+            "tinylib-1.2.3-cp31-abi3-manylinux_2_17_x86_64.whl",
+            mappers=(aggregator_mapper,),
+            abi3_upper_bound="3.6",
+        )
+
+        assert configs == ()
+
+    def test_below_abi3ts_own_floor_is_dropped_entirely(self) -> None:
+        """The `abi3t` analogue of the case above -- and the one where
+        skipping the pre-explosion floor check would actually matter: with
+        no check, `cp310-abi3t` would explode into "valid-looking"
+        free-threaded 3.10+ configs, since nothing else in `WheelConfig`
+        enforces `abi3t`'s free-threading-specific 3.15 floor.
+        """
+        configs = parse_filename(
+            "tinylib-1.2.3-cp310-abi3t-manylinux_2_17_x86_64.whl",
+            mappers=(aggregator_mapper,),
+            abi3_upper_bound="3.16",
+        )
+
+        assert configs == ()
+
+    def test_compressed_and_abi3_expansion_dedupe_together(self) -> None:
+        """`cp39.cp310-abi3-*` compressed-expands to two input tags whose
+        exploded ranges overlap at `cp310`; the wheel must still produce
+        exactly one `cp310` config.
+        """
+        configs = parse_filename(
+            "tinylib-1.2.3-cp39.cp310-abi3-manylinux_2_17_x86_64.whl",
+            mappers=(aggregator_mapper,),
+            abi3_upper_bound="3.10",
+        )
+
+        assert {c.interpreter for c in configs} == {"cp39", "cp310"}
+        assert len(configs) == 2
+
+    def test_default_upper_bound_comes_from_the_latest_release_lookup(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("reroll.filename.abi3.latest_python_minor", lambda: 11)
+
+        configs = parse_filename(
+            "tinylib-1.2.3-cp39-abi3-manylinux_2_17_x86_64.whl", mappers=(aggregator_mapper,)
+        )
+
+        assert {c.interpreter for c in configs} == {"cp39", "cp310", "cp311"}
+
+    def test_non_abi3_wheel_never_calls_the_default_lookup(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _fail() -> int:
+            raise AssertionError("must not look up a default when nothing needs exploding")
+
+        monkeypatch.setattr("reroll.filename.abi3.latest_python_minor", _fail)
+
+        parse_filename(
+            "tinylib-1.2.3-cp313-cp313-manylinux_2_17_x86_64.whl", mappers=(aggregator_mapper,)
+        )
 
 
 # --------------------------------------------------------------------------

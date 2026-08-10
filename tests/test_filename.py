@@ -1095,6 +1095,62 @@ class TestParseFilenameAbi3Explosion:
 
 
 # --------------------------------------------------------------------------
+# `parse_filename` <-> `allow_pre` (docs/wheel_filename.md: "A package
+# version may only contain pre-release tags ... if the `allow_pre` setting
+# is true").
+# --------------------------------------------------------------------------
+
+
+class TestParseFilenameAllowPre:
+    @pytest.mark.parametrize(
+        "version",
+        ["1.2.3rc1", "1.2.3a1", "1.2.3b1", "1.2.3.dev1"],
+        ids=["rc", "alpha", "beta", "dev"],
+    )
+    def test_prerelease_version_rejected_by_default(self, version: str) -> None:
+        assert (
+            parse_filename(f"tinylib-{version}-py3-none-any.whl", mappers=(aggregator_mapper,))
+            == ()
+        )
+
+    @pytest.mark.parametrize(
+        "version",
+        ["1.2.3rc1", "1.2.3a1", "1.2.3b1", "1.2.3.dev1"],
+        ids=["rc", "alpha", "beta", "dev"],
+    )
+    def test_prerelease_version_allowed_with_allow_pre(self, version: str) -> None:
+        (config,) = parse_filename(
+            f"tinylib-{version}-py3-none-any.whl",
+            mappers=(aggregator_mapper,),
+            allow_pre=True,
+        )
+
+        assert config.version == Version(version)
+
+    def test_postrelease_version_is_not_a_prerelease(self) -> None:
+        """A post-release (`.postN`) is unaffected by `allow_pre`: it is
+        accepted whether or not the flag is set.
+        """
+        (config,) = parse_filename(
+            "tinylib-1.2.3.post1-py3-none-any.whl", mappers=(aggregator_mapper,)
+        )
+
+        assert config.version == Version("1.2.3.post1")
+
+    def test_prerelease_rejection_logs_at_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.WARNING, logger="reroll.filename"):
+            parse_filename("tinylib-1.2.3rc1-py3-none-any.whl", mappers=(aggregator_mapper,))
+
+        assert caplog.records
+        assert all(record.levelno == logging.WARNING for record in caplog.records)
+
+    def test_allow_pre_defaults_to_false(self) -> None:
+        assert (
+            parse_filename("tinylib-1.2.3rc1-py3-none-any.whl", mappers=(aggregator_mapper,)) == ()
+        )
+
+
+# --------------------------------------------------------------------------
 # `parse_filename` <-> name mapping
 # --------------------------------------------------------------------------
 

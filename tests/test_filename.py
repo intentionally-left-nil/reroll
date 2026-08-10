@@ -24,6 +24,7 @@ from reroll.filename import (
     supported_archs,
 )
 from reroll.filename.abi3 import explode_abi3
+from reroll.filename.python_requirement import minor_range
 from reroll.name_mapping import (
     Candidate,
     NameMappers,
@@ -454,6 +455,15 @@ class TestInterpreterAbiPairing:
         with pytest.raises(ValidationError):
             _config(interpreter="cp310", abi="abi3t")
 
+    def test_rejects_versioned_free_threaded_below_313(self) -> None:
+        """Free-threaded builds only exist from Python 3.13 onward
+        (docs/wheel_to_conda_dependencies.md); a versioned free-threaded
+        ABI below that minor is rejected the same way `abi3t` is rejected
+        below its own 3.15 floor.
+        """
+        with pytest.raises(ValidationError):
+            _config(interpreter="cp39", abi="cp39t")
+
 
 # --------------------------------------------------------------------------
 # `arch` membership
@@ -557,6 +567,40 @@ class TestPythonRequirement:
         assert not intersection.contains("3.8.0")
         assert not intersection.contains("3.13.0")
         assert not intersection.contains("3.10.1")
+
+
+# --------------------------------------------------------------------------
+# `minor_range`
+# --------------------------------------------------------------------------
+
+
+class TestMinorRange:
+    def test_open_ended_floor_has_no_ceiling(self) -> None:
+        assert minor_range(SpecifierSet(">=3.8,<4")) == (8, None)
+
+    def test_agrees_with_python_requirement_floor(self) -> None:
+        assert minor_range(PythonRequirement.floor(8).specifier) == (8, None)
+
+    def test_single_minor_pin_is_a_width_one_range(self) -> None:
+        assert minor_range(SpecifierSet("==3.13.*")) == (13, 14)
+
+    def test_agrees_with_python_requirement_pinned(self) -> None:
+        assert minor_range(PythonRequirement.pinned(13).specifier) == (13, 14)
+
+    def test_two_sided_range(self) -> None:
+        assert minor_range(SpecifierSet(">=3.9,<3.12")) == (9, 12)
+
+    def test_gap_in_the_middle_is_rejected(self) -> None:
+        """`!=3.9.*` carves a hole out of an otherwise-open range -- no
+        `(floor, ceiling)` pair can represent "3.8, then 3.10 onward, but
+        not 3.9", so this is rejected rather than silently approximated.
+        """
+        with pytest.raises(ValueError, match="not a contiguous"):
+            minor_range(SpecifierSet(">=3.8,!=3.9.*,<3.12"))
+
+    def test_no_satisfying_minor_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="not a contiguous"):
+            minor_range(SpecifierSet("<3.0"))
 
 
 # --------------------------------------------------------------------------

@@ -12,6 +12,15 @@ from reroll.filename.interpreter import parse_interpreter
 
 _ABI_CP_RE = re.compile(r"^cp(\d+)([dmut]*)$")
 
+_FREE_THREADED_FLOOR = 13
+"""Lowest minor a free-threaded ABI (`cp3XXt`/`abi3t`) may target -- no
+free-threaded CPython build exists below Python 3.13
+(docs/wheel_to_conda_dependencies.md). `abi3t` additionally floors at 3.15
+per its own PEP 803 acceptance gate (docs/wheel_filename.md); this
+constant is the looser floor that applies to a *versioned* free-threaded
+ABI instead.
+"""
+
 
 @dataclass(frozen=True)
 class AbiInfo:
@@ -77,6 +86,9 @@ def check_interpreter_abi(interpreter: str, abi: str) -> None:
     they get their own (already-checked) floors rather than the 3.4 one --
     `cp32-abi3` is fine even though python 3.2 itself doesn't exist on those
     channels, because the floor resolves up to whatever 3.4+ IS available.
+    A `cpXYt` versioned ABI additionally requires minor >= 13
+    (`_FREE_THREADED_FLOOR`), since no free-threaded CPython build exists
+    below that.
     """
     prefix, _, interp_minor = parse_interpreter(interpreter)
     abi_info = parse_abi(abi)
@@ -103,6 +115,10 @@ def check_interpreter_abi(interpreter: str, abi: str) -> None:
             raise ValueError(f"versioned abi {abi!r} minor must match interpreter {interpreter!r}")
         if interp_minor < 4:
             raise ValueError(f"CPython < 3.4 is unsupported: {interpreter!r}")
+        if abi_info.free_threaded and interp_minor < _FREE_THREADED_FLOOR:
+            raise ValueError(
+                f"free-threaded CPython < 3.{_FREE_THREADED_FLOOR} is unsupported: {interpreter!r}"
+            )
         return
 
     # STABLE (abi3 / abi3t). The floor comes from the interpreter tag's own

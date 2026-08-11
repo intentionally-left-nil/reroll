@@ -73,22 +73,33 @@ class TestNoRequiresPython:
         [
             ("cp37", "none", "python >=3.7,<3.8.0a0"),
             ("cp37", "cp37", "python >=3.7,<3.8.0a0"),
-            ("cp312", "cp312", "python >=3.12,<3.13.0a0"),
+            ("cp39", "cp39", "python >=3.9,<3.10.0a0"),
         ],
     )
-    def test_pinned_python_only_below_313(
+    def test_pinned_python_only_below_310(
         self, interpreter: str, abi: str, expected_matchspec: str
     ) -> None:
         config = _config(interpreter=interpreter, abi=abi)
 
         assert python_dependencies(config, _metadata()) == (expected_matchspec,)
 
-    def test_regular_gil_emits_python_abi_from_313(self) -> None:
-        config = _config(interpreter="cp313", abi="cp313")
+    @pytest.mark.parametrize(
+        ("minor", "expected_python", "expected_python_abi"),
+        [
+            (10, "python >=3.10,<3.11.0a0", "python_abi 3.10.* *_cp310"),
+            (11, "python >=3.11,<3.12.0a0", "python_abi 3.11.* *_cp311"),
+            (12, "python >=3.12,<3.13.0a0", "python_abi 3.12.* *_cp312"),
+            (13, "python >=3.13,<3.14.0a0", "python_abi 3.13.* *_cp313"),
+        ],
+    )
+    def test_regular_gil_emits_python_abi_from_310(
+        self, minor: int, expected_python: str, expected_python_abi: str
+    ) -> None:
+        config = _config(interpreter=f"cp3{minor}", abi=f"cp3{minor}")
 
         assert python_dependencies(config, _metadata()) == (
-            "python >=3.13,<3.14.0a0",
-            "python_abi 3.13.* *_cp313",
+            expected_python,
+            expected_python_abi,
         )
 
     def test_free_threaded_emits_t_suffixed_python_abi(self) -> None:
@@ -102,14 +113,14 @@ class TestNoRequiresPython:
     def test_none_abi_still_emits_python_abi(self) -> None:
         """A `cp`-prefixed interpreter pins its minor exactly even with the
         `none` ABI (docs/wheel_filename.md); since the wheel is still
-        CPython-only, `python_abi` is emitted the same as for a `cp313`
+        CPython-only, `python_abi` is emitted the same as for a `cp310`
         ABI tag.
         """
-        config = _config(interpreter="cp313", abi="none")
+        config = _config(interpreter="cp310", abi="none")
 
         assert python_dependencies(config, _metadata()) == (
-            "python >=3.13,<3.14.0a0",
-            "python_abi 3.13.* *_cp313",
+            "python >=3.10,<3.11.0a0",
+            "python_abi 3.10.* *_cp310",
         )
 
 

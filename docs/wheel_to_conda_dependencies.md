@@ -20,16 +20,16 @@ Our algorithm for converting wheel information into conda `depends` is:
 This is the easy case, just copy the tightened version rangne as a matchspec into depends, e.g. `python >= 3.8`
 If the wheel requires an exact minor version, or any funky tightening, don't normalize the range any further. Just use the tightened range as-is.
 
-## Wheel is a compiled wheel for a specific CPython GIL, minor version less than 3.13
+## Wheel is a compiled wheel for a specific CPython GIL, minor version less than 3.10
 
-Although conda-forge emits python_abi packages all the way down to 2.x, Anaconda's main channel does not emit below 3.10, so we need to fallback to the old way of describing dependencies. Additionally, the python_abi builds between 3.10-3.12 are missing the _cp3XX build tag, making targeting annoying. So, we will not use python_abi below 3.13. 
+Although conda-forge emits python_abi packages all the way down to 2.x, Anaconda's main channel does not emit below 3.10, so we need to fallback to the old way of describing dependencies. Additionally, free threaded builds don't exist before 3.13, so we will not emit python_abi below that point (and should ignore this invalid combo to begin with)
 
 A consequence is this will allow e.g. `pypy` to install, but as per the decisions, that's acceptable and congruent with how it works on main teday.
 
 1. Emit a python dependency for that minor version, e.g. `"python >=3.7,<3.8.0a0"` - Whatever the incoming python range is should be fine to use as-is
 2. Don't emit an ABI tag, and don't do extra validation the ABI tag matches - this is the responsibility of the filename parsing layer (aka `check_interpreter_abi`)
 
-## Wheel is a compiled wheel for a specific CPython GIL, minor version >= 3.13
+## Wheel is a compiled wheel for a specific CPython GIL, minor version >= 3.10
 
 For these wheels, we can additionall emit the correct python_abi to constrain solves to just CPython. Per filename restrictions, we only support CPython-based wheels, so we can simplify the logic here:
 

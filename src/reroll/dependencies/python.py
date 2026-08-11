@@ -12,11 +12,11 @@ from reroll.filename import WheelConfig
 from reroll.filename.python_requirement import minor_range
 from reroll.wheel_metadata import WheelMetadata
 
-_PYTHON_ABI_FLOOR = 13
-"""Lowest minor for which `python_abi` is emitted. conda-forge and main both
-ship `python_abi` below this, but main's earlier builds lack the
-interpreter-specific `_cp3XX` build tag, so pinning `python` alone is used
-instead for any minor below this floor (docs/wheel_to_conda_dependencies.md).
+_PYTHON_ABI_FLOOR = 10
+"""Lowest minor for which `python_abi` is emitted. Both conda-forge and main
+ship a `python_abi` package with an interpreter-specific `_cp3XX` build tag
+down to this floor; pinning `python` alone is used instead for any minor
+below it (docs/wheel_to_conda_dependencies.md).
 """
 
 _logger = logging.getLogger(__name__)
@@ -25,7 +25,7 @@ _logger = logging.getLogger(__name__)
 def python_dependencies(config: WheelConfig, metadata: WheelMetadata) -> tuple[str, ...] | None:
     """The `python` MatchSpec implied by `config`'s wheel tag, tightened
     against `metadata.requires_python` if present, plus a `python_abi`
-    MatchSpec for a compiled CPython wheel targeting Python 3.13 or later
+    MatchSpec for a compiled CPython wheel targeting Python 3.10 or later
     (derived from `config` alone -- `Requires-Python` never affects it).
 
     `None` if the two ranges don't intersect at all -- the caller should not
@@ -76,6 +76,6 @@ def _python_matchspec(floor: int, ceiling: int | None) -> str:
 
 
 def _python_abi_matchspec(minor: int, *, free_threaded: bool) -> str:
-    """`"python_abi 3.13.* *_cp313"` (or `*_cp313t` when free-threaded)."""
+    """`"python_abi 3.10.* *_cp310"` (or `*_cp310t` when free-threaded)."""
     build = f"cp3{minor}t" if free_threaded else f"cp3{minor}"
     return f"python_abi 3.{minor}.* *_{build}"

@@ -5,6 +5,7 @@
 * Reroll must silently strip out (but not error) any `Requires-Dist: Python ...` dependency (direct dependency on python, not a marker) for python and all related interpreters (python, cpython, pypy, graalpy)
 * `Requires-Dist` dependencies which contain local tags, direct URL's, or pre-release tags are invalid, and cause reroll to stop processing the entire repodata entry
 * An extra flag `allow_pre` is passed into the wheel_dependencies function. If true, then pre-release tags (dev, devN, alpha, beta, rc and their short-forms) are permitted, and are passed through as a valid dependency specifier
+* Provides-Extra is completely ignored. Extras for a package are determined by accumulating and normalizing the extra names from `Requires-Dist` only
 
 # Calculating the conda specifiers for python
 Since wheels were built and installed in the pypi ecosystem, we generally want the conda equivalent to match the real-world environments that pypi would have created.
@@ -172,3 +173,45 @@ One final note is that `allow_pre` will apply equally to both package versions, 
 
 ### Post-release
 Post releases are fine, however, because they are intended to take priority over an existing wheel. So, any pypi dependency like `mypackage 1.0.0.post1` is accepted, (and the package with that release would also be accepted by the filename command)
+
+# Dealing with extras
+Extras provide the way for one package to indicate "I have a second set of dependencies", and for another package to say, I depend on the first package with its additional dependencies.
+
+For example, with FastAPI:
+```
+Metadata-Version: 2.1
+Name: fastapi
+Version: 0.115.0
+Requires-Python: >=3.8
+Requires-Dist: starlette (<0.39.0,>=0.37.2)
+Requires-Dist: pydantic (!=1.8,!=1.8.1,!=2.0.0,!=2.0.1,!=2.1.0,<3.0.0,>=1.7.4)
+Requires-Dist: typing-extensions (>=4.8.0)
+Requires-Dist: importlib-metadata (>=1.0) ; python_version < "3.10"
+Provides-Extra: standard
+Requires-Dist: fastapi-cli[standard] (>=0.0.5) ; extra == "standard"
+Requires-Dist: httpx (>=0.23.0) ; extra == "standard"
+Requires-Dist: jinja2 (>=2.11.2) ; extra == "standard"
+Requires-Dist: python-multipart (>=0.0.7) ; extra == "standard"
+Requires-Dist: uvicorn[standard] (>=0.12.0) ; extra == "standard"
+Provides-Extra: all
+Requires-Dist: httpx (>=0.23.0) ; extra == "all"
+Requires-Dist: orjson (>=3.2.1) ; extra == "all"
+```
+
+this provides for two extras - `standard`, and `all`
+
+Extras are somewhat underspecced. First, the names of specs were originally not normalized. They were normalized for later wheels such that multiple `Provides-Extra` e.g. for `ALL` and `all` would raise an error at packaging time, leading to the following guidance in the [core metadata](https://packaging.python.org/en/latest/specifications/core-metadata/)
+
+> When writing data for older metadata versions, names MUST be normalized following the same rules used for the Name: field when performing comparisons. Tools writing metadata MUST raise an error if two Provides-Extra: entries would clash after being normalized.
+
+Also underspecified is what happens when `Provides-Extra` is not present. The same core spec says
+> It is legal to specify Provides-Extra: without referencing it in any Requires-Dist:.
+
+However the spec is silent on the other way around. Is it legal to have a Requires-Dist that has an extra, without the Provides-Extra?
+pip and uv differ in their behavior here. Pip will silently refuse to install any extra dependencies if the corresponding `Provides-Extra` for that key is missing. Uv, on the other hand, will allow it, but emit a warning
+
+Since Requires-Extra only guards against a typo - tools can definitively determine the extra names just by aggregating the `Requires-Dist` entries, we will treat `Provides-Extra` as superfluous and ignore it.
+
+## Requiring a dependency with an extra
+On the flip side, what happens if another package includes `Requires-Dist: fastapi[all]` in their requirements?
+This needs to be translated into the conda-equivalent matchspec `fastapi[extras=[all]]`. However, matchspec does not accept `fastapi[all]` (since the [] notation is already overloaded in conda-land). So, instead, the extra markers need to be extracted, f'extras=[','.join(extracted)]' needs to be called (after normalizing the names of course)

@@ -54,7 +54,7 @@ The version specifier is a very [complicated](https://packaging.python.org/en/la
 
 This spec not only has a normalized form `[N!]N(.N)*[{a|b|rc}N][.postN][.devN]`, but it also allows for an expansive syntax which can then be normalized.
 
-For example, `1.2.3.a1` is the normalized version of `1.2.3.alpha1`
+For example, `1.2.3a1` is the normalized version of `1.2.3alpha1`
 
 Beyond the specification, pip used to have relaxed requirements around the wheel regex, which was then enforced starting in pip 25.3: https://github.com/pypa/pip/issues/12938
 

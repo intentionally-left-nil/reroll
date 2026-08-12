@@ -54,7 +54,9 @@ The version specifier is a very [complicated](https://packaging.python.org/en/la
 
 This spec not only has a normalized form `[N!]N(.N)*[{a|b|rc}N][.postN][.devN]`, but it also allows for an expansive syntax which can then be normalized.
 
-For example, `1.2.3.a1` is the normalized version of `1.2.3.alpha1`
+For example, `1.2.3a1` is the normalized version of `1.2.3alpha1`
+
+See [matchspec.md's Version conversion](./matchspec.md#version-conversion) for the algorithm converting this normalized version into the CEP-33 conda version string.
 
 Beyond the specification, pip used to have relaxed requirements around the wheel regex, which was then enforced starting in pip 25.3: https://github.com/pypa/pip/issues/12938
 
@@ -62,7 +64,7 @@ What this means in practice is that there are potentially old wheels which old v
 Note that some of these differences in behavior apply to other fields, but the version is one of the main ones that caused old wheels to fail current validation.
 
 Reroll is deliberately more restrictive than the pypi spec when it comes to pre-releases, due to the nature of how `pip install --pre` works compared to conda. Instead, pre-release versions are disallowed by default,
-and only permitted with the `allow_pre` flag. See [wheel_to_conda_dependencies](./wheel_to_conda_dependencies.md#pre-release) for details
+and only permitted with the `allow_pre` flag. See [matchspec.md's Pre-release](./matchspec.md#pre-release) for details
 
 # Build tag
 The build tag must start with a number, then it can be any unicode string except a hyphen `-`. In practice, this string is probably still ascii restricted. The only purpose of the build tags is to break ties when the wheels are otherwise identical in terms of matching. From the spec:

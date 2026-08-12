@@ -359,6 +359,8 @@ There is no existing tooling to take a python marker and convert it to a matchsp
 | `os_name == "posix"` | `__unix` |
 | `os_name == "nt"` | `__win` |
 
+`in/not in` is unsupported. See [Dealing with in and not in](#dealing-with-in-and-not-in) for details
+
 `python_version` is truncated to major.minor, but conda compares the full `python` version, so the ordered comparisons cannot be passed through: `python_version <= "3.9"` as `python<=3.9` would exclude 3.9.1, and `python_version > "3.9"` as `python>3.9` would wrongly include it. Every boundary is anchored at `.0a0` so that a pre-release of the boundary minor lands on the same side of the comparison that the marker would put it on (`python_version` of `3.9.0rc1` is `3.9`).
 
 
@@ -376,15 +378,13 @@ Convert `platform_system != Linux` into `__osx or __win`. This can be accomplish
 For `os_name` the pattern is the same except the mapping would be `{"posix": "__unix", "nt": "__win"}`
 
 ## Dealing with in and not in
-Instead of a range, pypi markers can use in/not in semantics, such as `Requires-Dist: packageA ; python_version in "3.8 3.9 3.10"`, 
-This can be solved via the same expansion concept as virtual packages above.
-`packageA[when="python[version='>=3.8.0a0,<3.9.0a0|>=3.9.0a0,<3.10.0a0|>=3.10.0a0,<3.11.0a0']"]` becomes the expansion for the positive case (each member expanded per the `python_version == "X.Y"` row above), and for the negation
-`Requires-Dist: packageA ; python_version not in "3.8 3.9 3.10"` turns into `packageA[when="python[version='!=3.8.*,!=3.9.*,!=3.10.*']"]`
 
-This means we can perform this expansion, with a known univers set for `os_name`, `platform_system`, `sys_platform`, and `platform_machine`
+in/not in perform substring matches, instead of exact equality with `==`. Since it's a substring, order matters `apple in apple_pie` is not the same as `apple_pie in apple`.
+Conda matchspec doesn't provide a clean mapping to matching this behavior. On first glance, one could try to model `python_version in "3.11"` with the matchspec `packageA[when="python *3.11*"]` 
+However, rattler-py doesn't support a leading `*` for the version field (this may be a rattler bug) as `VersionSpec('*3.1*')` throws an exception. This bug has been filed as https://github.com/conda/rattler/issues/2679
 
-There's still one more edge case. A valid marker can reverse the condition: `Requires-Dist: packageA ; "3.8 3.9 3.10" in python_version` For simplicity we will reject this case, and the matchspec conversion code will emit an error if it sees the "reversed" in operator
-
+Until this is fixed, we will NOT support `in/not in` with matchspec. Instead, the conversion code should raise an error if that is present.
+Potentially this could be worked around for python_version by means of exhaustive expansion of the possibilties, pre-computing the actual matches, and then selecting those. However that's a lot of work and so the initial decision is just to not allow `in/not in`
 
 
 # Splitting base dependencies from extras

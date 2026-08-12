@@ -62,7 +62,7 @@ os_name: `posix` or `nt`
 
 ## Wheel is pure python (interpreter and ABI independent)
 This is the easy case, just copy the tightened version rangne as a matchspec into depends, e.g. `python>=3.8`
-If the wheel requires an exact minor version, or any funky tightening, don't normalize the range any further. Just use the tightened range as-is. That is about the range's meaning, not its spelling - the rewrite in [Operator conversion](#operator-conversion) still applies, so an exact minor arrives as `==3.13.*` and is emitted as `python=3.13`.
+If the wheel requires an exact minor version, or any funky tightening, don't normalize the range any further. Just use the tightened range as-is. That is about the range's meaning, not its spelling - an exact minor arrives as `==3.13.*` and is emitted as the equivalent range `python>=3.13,<3.14.0a0`, not the fuzzy `=3.13` form from [Operator conversion](#operator-conversion), so that the `0a0` upper bound excludes 3.14 pre-releases.
 
 ## Wheel is a compiled wheel for a specific CPython GIL, minor version less than 3.10
 
@@ -344,17 +344,22 @@ There is no existing tooling to take a python marker and convert it to a matchsp
 
 | marker key | matchspec |
 |---|---|
-| `python_version == "X.Y"` | `python=X.Y.*` |
+| `python_version == "X.Y"` | `python>=X.Y.0a0,<X.(Y+1).0a0` |
 | `python_version != "X.Y"` | `python!=X.Y.*` |
-| `python_version <op> "X.Y"` (`>=`, `<=`, `>`, `<`) | `python<op>X.Y` (passthrough) |
-| `python_full_version` / `implementation_version` `== "X.Y.Z"` | `python=X.Y.Z.*` |
-| `python_full_version` / `implementation_version` `!= "X.Y.Z"` | `python!=X.Y.Z.*` |
+| `python_version >= "X.Y"` | `python>=X.Y.0a0` |
+| `python_version > "X.Y"` | `python>=X.(Y+1).0a0` |
+| `python_version <= "X.Y"` | `python<X.(Y+1).0a0` |
+| `python_version < "X.Y"` | `python<X.Y.0a0` |
+| `python_full_version` / `implementation_version` `== "X.Y.Z"` | `python==X.Y.Z` |
+| `python_full_version` / `implementation_version` `!= "X.Y.Z"` | `python!=X.Y.Z` |
 | `python_full_version` / `implementation_version` `<op> "X.Y.Z"` (`>=`, `<=`, `>`, `<`) | `python<op>X.Y.Z` (passthrough) |
 | `platform_system == "Linux"` / `sys_platform == "linux"` | `__linux` |
 | `platform_system == "Darwin"` / `sys_platform == "darwin"` | `__osx` |
 | `platform_system == "Windows"` / `sys_platform == "win32"` | `__win` |
 | `os_name == "posix"` | `__unix` |
 | `os_name == "nt"` | `__win` |
+
+`python_version` is truncated to major.minor, but conda compares the full `python` version, so the ordered comparisons cannot be passed through: `python_version <= "3.9"` as `python<=3.9` would exclude 3.9.1, and `python_version > "3.9"` as `python>3.9` would wrongly include it. Every boundary is anchored at `.0a0` so that a pre-release of the boundary minor lands on the same side of the comparison that the marker would put it on (`python_version` of `3.9.0rc1` is `3.9`).
 
 
 ## Dealing with != with matchspec and virtual packages
@@ -373,7 +378,7 @@ For `os_name` the pattern is the same except the mapping would be `{"posix": "__
 ## Dealing with in and not in
 Instead of a range, pypi markers can use in/not in semantics, such as `Requires-Dist: packageA ; python_version in "3.8 3.9 3.10"`, 
 This can be solved via the same expansion concept as virtual packages above.
-`packageA[when="python[version='3.8.*|3.9.*|3.10.*']"]` becomes the expansion for the positive case, and for the negation
+`packageA[when="python[version='>=3.8.0a0,<3.9.0a0|>=3.9.0a0,<3.10.0a0|>=3.10.0a0,<3.11.0a0']"]` becomes the expansion for the positive case (each member expanded per the `python_version == "X.Y"` row above), and for the negation
 `Requires-Dist: packageA ; python_version not in "3.8 3.9 3.10"` turns into `packageA[when="python[version='!=3.8.*,!=3.9.*,!=3.10.*']"]`
 
 This means we can perform this expansion, with a known univers set for `os_name`, `platform_system`, `sys_platform`, and `platform_machine`

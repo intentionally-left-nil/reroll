@@ -78,13 +78,20 @@ For these wheels, we can additionall emit the correct python_abi to constrain so
 1. Emit a python dependency for that minor version, e.g. `"python >=3.7,<3.8.0a0"` - Whatever the incoming python range is should be fine to use as-is
 2. Take the ABI tag, and from that version e.g. `cp313`, derive the `python_abi` Matchspec combining a version plus build string e.g. `"python_abi 3.13.* *_cp313"`
 
+## Wheel targets CPython but no abi
+`cp37-none-any` would be an example package. Since the version of python must be that minor version (and not a floor), we can treat this like `cp37-cp37` with respect to determining the python range.
+1. Use the python version as the ABI tag (e.g. `cp37`)
+2. Follow the existing rules for handling a paired cPython/ABI (e.g. `cp37-cp37`)
+
+
 ## Wheel is a compiled wheel for a specific CPython free threaded version
 All free threaded builds are >= 3.13, so this is just a small modification to the normal GIL case.
 1. Emit a python dependency for that minor version, e.g. `"python >=3.7,<3.8.0a0"` - Whatever the incoming python range is should be fine to use as-is
 2. Take the ABI tag, and from that version e.g. `cp313t`, derive the `python_abi` Matchspec combining a version plus build string e.g. `"python_abi 3.13.* *_cp313t"` (note the `t` at the end)
 
 ## Wheel is a compiled wheel for a CPython floor, and abi3 or abi3t
-This is an error. The [wheel_filename](./wheel_filename#abi-explosion) docs specifically solve this problem by exploding out the value of python to a specific version, because the dependencies cannot be expressed in conda otherwise. If the dependency generation code sees `abi3` or `abi3t` it should error out as this is reroll's bug, not a caller bug or wheel issue
+This is an error. The [wheel_filename](./wheel_filename.md#abi-explosion) docs specifically solve this problem by exploding out the value of python to a specific version, because the dependencies cannot be expressed in conda otherwise. If the dependency generation code sees `abi3` or `abi3t` it should error out as this is reroll's bug, not a caller bug or wheel issue
+
 
 # How conda repodata expresses dependencies
 Traditional conda repodata (v1, predating wheels) expresses repodata dependencies via two keys, `constrains`, and `depends`.

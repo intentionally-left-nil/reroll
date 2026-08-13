@@ -6,6 +6,7 @@ import pytest
 from markerpry import TRUE, parse
 
 from reroll.dependencies.marker_conversion import marker_condition
+from reroll.errors import UnconvertableMarkerError
 
 
 class TestPythonVersion:
@@ -29,12 +30,12 @@ class TestPythonVersion:
 
     @pytest.mark.parametrize("marker", ['python_version ~= "3.9"', 'python_version === "3.9"'])
     def test_unsupported_comparator_raises(self, marker: str) -> None:
-        with pytest.raises(ValueError, match="python_version"):
+        with pytest.raises(UnconvertableMarkerError, match="python_version"):
             marker_condition(parse(marker))
 
     @pytest.mark.parametrize("literal", ["3", "3.9.1", "3.x"])
     def test_non_major_minor_literal_raises(self, literal: str) -> None:
-        with pytest.raises(ValueError, match="python_version"):
+        with pytest.raises(UnconvertableMarkerError, match="python_version"):
             marker_condition(parse(f'python_version == "{literal}"'))
 
 
@@ -61,7 +62,7 @@ class TestPythonFullVersion:
         ['python_full_version ~= "3.13.0"', 'python_full_version === "3.13.0"'],
     )
     def test_unsupported_comparator_raises(self, marker: str) -> None:
-        with pytest.raises(ValueError, match="python_full_version"):
+        with pytest.raises(UnconvertableMarkerError, match="python_full_version"):
             marker_condition(parse(marker))
 
 
@@ -91,7 +92,7 @@ class TestVirtualPackages:
         ],
     )
     def test_inequality_is_unsupported(self, marker: str) -> None:
-        with pytest.raises(ValueError, match="!="):
+        with pytest.raises(UnconvertableMarkerError, match="!="):
             marker_condition(parse(marker))
 
     @pytest.mark.parametrize(
@@ -103,32 +104,32 @@ class TestVirtualPackages:
         ],
     )
     def test_unrecognized_value_is_unsupported(self, marker: str) -> None:
-        with pytest.raises(ValueError, match="no known virtual package mapping"):
+        with pytest.raises(UnconvertableMarkerError, match="no known virtual package mapping"):
             marker_condition(parse(marker))
 
     def test_unsupported_comparator_is_rejected(self) -> None:
-        with pytest.raises(ValueError, match="not supported for sys_platform"):
+        with pytest.raises(UnconvertableMarkerError, match="not supported for sys_platform"):
             marker_condition(parse('sys_platform >= "win32"'))
 
 
 class TestUnsupportedMarkerKeys:
     def test_platform_machine_is_unsupported(self) -> None:
-        with pytest.raises(ValueError, match="platform_machine"):
+        with pytest.raises(UnconvertableMarkerError, match="platform_machine"):
             marker_condition(parse('platform_machine == "x86_64"'))
 
     @pytest.mark.parametrize("marker", ['platform_release == "10"', 'platform_version == "1"'])
     def test_other_unmapped_keys_are_unsupported(self, marker: str) -> None:
-        with pytest.raises(ValueError, match="no matchspec equivalent"):
+        with pytest.raises(UnconvertableMarkerError, match="no matchspec equivalent"):
             marker_condition(parse(marker))
 
 
 class TestContainsNode:
     def test_in_is_unsupported(self) -> None:
-        with pytest.raises(ValueError, match="in"):
+        with pytest.raises(UnconvertableMarkerError, match="in"):
             marker_condition(parse('python_version in "3.11"'))
 
     def test_not_in_is_unsupported(self) -> None:
-        with pytest.raises(ValueError, match="in"):
+        with pytest.raises(UnconvertableMarkerError, match="in"):
             marker_condition(parse('python_version not in "3.11"'))
 
 
@@ -151,7 +152,7 @@ class TestCombining:
     def test_unsupported_leaf_propagates_through_a_combination(self) -> None:
         marker = 'platform_machine == "x86_64" and sys_platform == "win32"'
 
-        with pytest.raises(ValueError, match="platform_machine"):
+        with pytest.raises(UnconvertableMarkerError, match="platform_machine"):
             marker_condition(parse(marker))
 
 

@@ -35,7 +35,7 @@ def wheel_dependencies(
     mappers: NameMappers,
     *,
     allow_pre: bool = False,
-) -> WheelDependencies | None:
+) -> WheelDependencies:
     """The conda dependencies implied by `config` and `metadata`.
 
     `depends` is `metadata.requires_dist` (after stripping bare
@@ -49,21 +49,19 @@ def wheel_dependencies(
     `Requires-Dist` entry marked with a bare `extra == "name"` clause
     contributes to it, in declaration order.
 
-    `None` if `config`'s filename-implied Python range and
-    `metadata.requires_python` don't intersect -- the caller should not
-    generate a repodata record for this wheel.
+    Raises `reroll.errors.PythonRangeMismatchError` if
+    `config`'s filename-implied Python range and `metadata.requires_python`
+    don't intersect -- the caller should not generate a repodata record for
+    this wheel.
 
-    Raises `ValueError` if a `Requires-Dist` entry turns out to be
-    unrepresentable in conda
-    (`reroll.dependencies.pep508_to_matchspec.pep508_to_matchspec`), which
-    includes a marker mixing an `extra == "name"` clause with anything
-    else -- that combination is a separate mechanism (grouping a
+    Raises `reroll.errors.UnconvertableRequirementError`
+    if a `Requires-Dist` entry turns out to be unrepresentable in conda,
+    which includes a marker mixing an `extra == "name"` clause with
+    anything else -- that combination is a separate mechanism (grouping a
     dependency into one of the *current* package's own extras) than an
     environment marker, and isn't implemented here.
     """
     python_deps = python_dependencies(config, metadata)
-    if python_deps is None:
-        return None
     depends: list[str] = []
     extra_depends: dict[str, list[str]] = {}
     for entry in strip_interpreter_requirements(metadata.requires_dist):

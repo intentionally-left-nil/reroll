@@ -16,7 +16,9 @@ from conda_lock.lookup import DEFAULT_MAPPING_URL, _get_pypi_lookup
 from conda_lock.lookup_cache import cached_download_file
 from packaging.utils import NormalizedName, canonicalize_name
 from pydantic import TypeAdapter
+from ruamel.yaml import YAMLError
 
+from reroll.errors import ConfigLoadError
 from reroll.name_mapping import Candidate, CandidateSource, NameMapper
 
 _MAPPINGS_BASE = "https://raw.githubusercontent.com/regro/cf-graph-countyfair/master/mappings/pypi"
@@ -165,12 +167,21 @@ def _candidate_table(
 
     Callers must treat the result as read-only: it is shared by every mapper
     built from the same three sources.
+
+    Raises `ConfigLoadError` if any of the three sources can't be fetched,
+    read, or parsed as the shape it's expected to have.
     """
-    return build_candidates(
-        mapping=_MAPPING_ADAPTER.validate_python(_get_pypi_lookup(mapping_url)),
-        import_priority=_PRIORITY_ADAPTER.validate_json(_read_sibling(priority_url)),
-        raw_mappings=_RAW_MAPPINGS_ADAPTER.validate_json(_read_sibling(name_mapping_url)),
-    )
+    try:
+        return build_candidates(
+            mapping=_MAPPING_ADAPTER.validate_python(_get_pypi_lookup(mapping_url)),
+            import_priority=_PRIORITY_ADAPTER.validate_json(_read_sibling(priority_url)),
+            raw_mappings=_RAW_MAPPINGS_ADAPTER.validate_json(_read_sibling(name_mapping_url)),
+        )
+    except (OSError, ValueError, YAMLError) as exc:
+        raise ConfigLoadError(
+            f"failed to load conda-lock mapping tables "
+            f"({mapping_url!r}, {priority_url!r}, {name_mapping_url!r}): {exc}"
+        ) from exc
 
 
 def _ambiguous_import_names(import_priority: Sequence[PriorityEntry]) -> frozenset[str]:

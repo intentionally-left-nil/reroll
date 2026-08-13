@@ -10,12 +10,12 @@ import pytest
 from packaging.utils import NormalizedName, canonicalize_name
 from pydantic import ValidationError
 
+from reroll.errors import UnresolvedCondaNameError
 from reroll.name_mapping import (
     Candidate,
     CandidateSource,
     NameMapper,
     NameMappers,
-    UnresolvedCandidates,
     aggregator_mapper,
     map_name,
     static_mapper,
@@ -322,29 +322,29 @@ class TestNonEmptyMapperChain:
 
     def test_empty_chain_never_reaches_unresolved_candidates(self) -> None:
         """The empty-chain rejection is a `ValueError`, distinct from --
-        and raised before -- the `UnresolvedCandidates` a non-empty chain
+        and raised before -- the `UnresolvedCondaNameError` a non-empty chain
         that never resolves would raise.
         """
         empty: NameMappers = cast(NameMappers, ())
 
         try:
             map_name("tinylib", empty)
-        except UnresolvedCandidates:
-            pytest.fail("expected ValueError, not UnresolvedCandidates")
+        except UnresolvedCondaNameError:
+            pytest.fail("expected ValueError, not UnresolvedCondaNameError")
         except ValueError:
             pass
 
 
 # --------------------------------------------------------------------------
-# `UnresolvedCandidates`
+# `UnresolvedCondaNameError`
 # --------------------------------------------------------------------------
 
 
-class TestUnresolvedCandidates:
+class TestUnresolvedCondaNameError:
     def test_raised_when_every_mapper_has_no_opinion(self) -> None:
         mappers = (_Spy(result=None), _Spy(result=None))
 
-        with pytest.raises(UnresolvedCandidates) as exc_info:
+        with pytest.raises(UnresolvedCondaNameError) as exc_info:
             map_name("Zope_Interface", mappers)
 
         assert exc_info.value.name == "zope-interface"
@@ -360,7 +360,7 @@ class TestUnresolvedCandidates:
             del name, candidates
             return contributed
 
-        with pytest.raises(UnresolvedCandidates) as exc_info:
+        with pytest.raises(UnresolvedCondaNameError) as exc_info:
             map_name("tinylib", (_contributor,))
 
         assert exc_info.value.candidates == contributed
@@ -378,7 +378,7 @@ class TestUnresolvedCandidates:
             del name, candidates
             return duplicates
 
-        with pytest.raises(UnresolvedCandidates) as exc_info:
+        with pytest.raises(UnresolvedCondaNameError) as exc_info:
             map_name("tinylib", (_contributor,))
 
         assert len(exc_info.value.candidates) == 2
@@ -388,13 +388,13 @@ class TestUnresolvedCandidates:
     def test_carries_its_attributes_directly(self) -> None:
         candidates = (_candidate(),)
 
-        exc = UnresolvedCandidates("opencv", candidates)
+        exc = UnresolvedCondaNameError("opencv", candidates)
 
         assert exc.name == "opencv"
         assert exc.candidates == candidates
 
     def test_defaults_to_no_candidates(self) -> None:
-        exc = UnresolvedCandidates("opencv")
+        exc = UnresolvedCondaNameError("opencv")
 
         assert exc.candidates == ()
 
@@ -473,7 +473,7 @@ class TestStaticMapper:
     def test_used_end_to_end_through_map_name_raises_on_a_miss(self) -> None:
         mapper = static_mapper({"tzdata": "python-tzdata"})
 
-        with pytest.raises(UnresolvedCandidates) as exc_info:
+        with pytest.raises(UnresolvedCondaNameError) as exc_info:
             map_name("requests", (mapper,))
 
         assert exc_info.value.candidates == ()
@@ -715,7 +715,7 @@ class TestAggregatorMapper:
             del name, candidates
             return contributed
 
-        with pytest.raises(UnresolvedCandidates) as exc_info:
+        with pytest.raises(UnresolvedCondaNameError) as exc_info:
             map_name("tinylib", (_contributor, aggregator_mapper))
 
         assert exc_info.value.candidates == contributed

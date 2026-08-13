@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from reroll.errors import CacheWriteError, NetworkFetchError, UpstreamDataError
 from reroll.filename.python_latest_release import (
     CACHE_FILENAME_PREFIX,
     DEFAULT_PYTHON_RELEASES_URL,
@@ -53,7 +54,7 @@ class TestLatestMinorFromReleases:
 
     def test_raises_when_no_3x_release_is_present(self) -> None:
         data = _releases_payload(["2.7"])
-        with pytest.raises(ValueError, match="3.x"):
+        with pytest.raises(UpstreamDataError, match="3.x"):
             _latest_minor_from_releases(data)
 
 
@@ -278,10 +279,44 @@ class TestDownloadIsAtomic:
 
         monkeypatch.setattr("urllib.request.urlopen", _fail_urlopen)
 
-        with pytest.raises(urllib.error.URLError):
+        with pytest.raises(NetworkFetchError):
             _download(DEFAULT_PYTHON_RELEASES_URL, tmp_path)
 
         assert list(tmp_path.iterdir()) == []
+
+    def test_a_non_os_error_during_download_still_cleans_up_and_propagates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failure that isn't network/IO related (e.g. a bug elsewhere)
+        must not be miscategorized as a `NetworkFetchError` -- it still
+        propagates as itself, but the staged scratch file is still cleaned
+        up either way.
+        """
+
+        def _fail_urlopen(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr("urllib.request.urlopen", _fail_urlopen)
+
+        with pytest.raises(RuntimeError, match="boom"):
+            _download(DEFAULT_PYTHON_RELEASES_URL, tmp_path)
+
+        assert list(tmp_path.iterdir()) == []
+
+    def test_a_failed_cache_install_raises_cache_write_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "urllib.request.urlopen",
+            lambda request, timeout=None: _FakeHTTPResponse(_payload_bytes(["3.14"])),
+        )
+        monkeypatch.setattr(
+            "pathlib.Path.replace",
+            lambda self, target: (_ for _ in ()).throw(OSError("disk full")),
+        )
+
+        with pytest.raises(CacheWriteError):
+            _download(DEFAULT_PYTHON_RELEASES_URL, tmp_path)
 
     def test_concurrent_downloads_never_produce_a_partially_written_file(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

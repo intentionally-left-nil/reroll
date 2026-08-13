@@ -9,6 +9,7 @@ from collections.abc import Iterable
 
 from packaging.tags import Tag
 
+from reroll.errors import RerollError
 from reroll.filename.abi import check_interpreter_abi
 from reroll.filename.interpreter import parse_interpreter
 from reroll.filename.python_latest_release import latest_python_minor
@@ -63,7 +64,7 @@ def _explode_one(tag: Tag, upper_minor: int) -> frozenset[Tag]:
 def _is_legal_pairing(interpreter: str, abi: str) -> bool:
     try:
         check_interpreter_abi(interpreter, abi)
-    except ValueError:
+    except RerollError:
         return False
     return True
 

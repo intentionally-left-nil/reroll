@@ -2,20 +2,30 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 
 import pytest
 from packaging.utils import NormalizedName
 
 from reroll.dependencies.pep508_to_matchspec import pep508_to_matchspec
-from reroll.name_mapping import Candidate, aggregator_mapper, static_mapper
+from reroll.errors import (
+    UnconvertableMarkerError,
+    UnconvertableRequirementError,
+    UnresolvedCondaNameError,
+)
+from reroll.name_mapping import (
+    Candidate,
+    aggregator_mapper,
+    static_mapper,
+)
 
 
 def _unresolved_mapper(
     name: NormalizedName, candidates: Sequence[Candidate]
 ) -> str | Sequence[Candidate]:
     """A `NameMapper` that never resolves anything, so `map_name` always
-    ends the chain with `UnresolvedCandidates`.
+    ends the chain with `UnresolvedCondaNameError`.
     """
     del name
     return candidates
@@ -53,7 +63,7 @@ class TestName:
         assert pep508_to_matchspec("Foo_Bar.BAZ", mappers) == "conda-foo-bar-baz"
 
     def test_unresolved_name_raises(self) -> None:
-        with pytest.raises(ValueError, match="requests"):
+        with pytest.raises(UnresolvedCondaNameError, match="requests"):
             pep508_to_matchspec("requests", (_unresolved_mapper,))
 
 
@@ -157,7 +167,7 @@ class TestOperators:
         )
 
     def test_compatible_release_rejects_a_pre_release_by_default(self) -> None:
-        with pytest.raises(ValueError, match="pre-release"):
+        with pytest.raises(UnconvertableRequirementError, match="pre-release"):
             pep508_to_matchspec("requests~=3.13.2rc1", (aggregator_mapper,))
 
     def test_compatible_release_allow_pre_permits_a_pre_release(self) -> None:
@@ -180,7 +190,7 @@ class TestOperators:
         """When `===`'s value happens to parse as a real PEP 440 version,
         it is still subject to the same pre-release check as `==`.
         """
-        with pytest.raises(ValueError, match="pre-release"):
+        with pytest.raises(UnconvertableRequirementError, match="pre-release"):
             pep508_to_matchspec("requests===1.0.0rc1", (aggregator_mapper,))
 
     def test_arbitrary_equality_allow_pre_permits_a_pre_release_version(self) -> None:
@@ -242,17 +252,17 @@ class TestRejections:
         ],
     )
     def test_rejects_a_local_version_label(self, entry: str) -> None:
-        with pytest.raises(ValueError, match="local version label"):
+        with pytest.raises(UnconvertableRequirementError, match="local version label"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     def test_local_version_label_error_names_the_entry(self) -> None:
-        with pytest.raises(ValueError, match="requests==1.0.0\\+local"):
+        with pytest.raises(UnconvertableRequirementError, match="requests==1.0.0\\+local"):
             pep508_to_matchspec("requests==1.0.0+local", (aggregator_mapper,))
 
     def test_rejects_a_direct_url_reference(self) -> None:
         entry = "requests @ https://example.com/requests-1.0.0.whl"
 
-        with pytest.raises(ValueError, match="direct URL"):
+        with pytest.raises(UnconvertableRequirementError, match="direct URL"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     @pytest.mark.parametrize(
@@ -265,41 +275,41 @@ class TestRejections:
         ],
     )
     def test_rejects_a_pre_release_version_by_default(self, entry: str) -> None:
-        with pytest.raises(ValueError, match="pre-release"):
+        with pytest.raises(UnconvertableRequirementError, match="pre-release"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     def test_pre_release_version_error_names_the_entry(self) -> None:
-        with pytest.raises(ValueError, match="requests==1.0.0rc1"):
+        with pytest.raises(UnconvertableRequirementError, match="requests==1.0.0rc1"):
             pep508_to_matchspec("requests==1.0.0rc1", (aggregator_mapper,))
 
     def test_dev_release_combined_with_a_post_release_is_still_a_pre_release(self) -> None:
         """A dev component makes a version a pre-release even alongside a
         post-release component, which alone would not be.
         """
-        with pytest.raises(ValueError, match="pre-release"):
+        with pytest.raises(UnconvertableRequirementError, match="pre-release"):
             pep508_to_matchspec("requests==1.0.0.post1.dev1", (aggregator_mapper,))
 
     def test_allow_pre_still_rejects_a_local_version_label(self) -> None:
-        with pytest.raises(ValueError, match="local version label"):
+        with pytest.raises(UnconvertableRequirementError, match="local version label"):
             pep508_to_matchspec("requests==1.0.0+local", (aggregator_mapper,), allow_pre=True)
 
     def test_local_version_label_is_rejected_before_pre_release_even_with_allow_pre(self) -> None:
         """A local label is checked unconditionally, ahead of the
         pre-release check that `allow_pre` would otherwise satisfy.
         """
-        with pytest.raises(ValueError, match="local version label"):
+        with pytest.raises(UnconvertableRequirementError, match="local version label"):
             pep508_to_matchspec("requests==1.0.0rc1+local", (aggregator_mapper,), allow_pre=True)
 
     def test_direct_url_rejection_takes_precedence_over_an_unresolved_name(self) -> None:
         entry = "unmapped-pkg @ https://example.com/pkg.whl"
 
-        with pytest.raises(ValueError, match="direct URL"):
+        with pytest.raises(UnconvertableRequirementError, match="direct URL"):
             pep508_to_matchspec(entry, (_unresolved_mapper,))
 
     def test_extra_marker_rejection_takes_precedence_over_a_direct_url(self) -> None:
         entry = 'requests @ https://example.com/pkg.whl ; extra == "foo"'
 
-        with pytest.raises(ValueError, match="extra"):
+        with pytest.raises(UnconvertableRequirementError, match="extra"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
 
@@ -333,13 +343,13 @@ class TestExtras:
     def test_extra_name_over_64_characters_is_rejected(self) -> None:
         entry = f"fastapi[{'a' * 65}]"
 
-        with pytest.raises(ValueError, match="64 characters"):
+        with pytest.raises(UnconvertableRequirementError, match="64 characters"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     def test_extra_name_over_64_characters_error_names_the_entry(self) -> None:
         entry = f"fastapi[{'a' * 65}]"
 
-        with pytest.raises(ValueError, match="fastapi"):
+        with pytest.raises(UnconvertableRequirementError, match="fastapi"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     def test_extra_name_at_exactly_64_characters_is_accepted(self) -> None:
@@ -363,7 +373,7 @@ class TestExtras:
     def test_any_invalid_extra_length_raises_even_when_others_are_valid(self) -> None:
         entry = f"fastapi[valid,{'a' * 65}]"
 
-        with pytest.raises(ValueError, match="64 characters"):
+        with pytest.raises(UnconvertableRequirementError, match="64 characters"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
 
@@ -476,25 +486,25 @@ class TestMarkers:
     def test_marker_with_only_an_extra_clause_raises(self) -> None:
         entry = 'requests>=2.0.0; extra == "foo"'
 
-        with pytest.raises(ValueError, match="extra"):
+        with pytest.raises(UnconvertableRequirementError, match="extra"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     def test_marker_combining_extra_clauses_raises(self) -> None:
         entry = 'requests>=2.0.0; extra == "foo" or extra == "bar"'
 
-        with pytest.raises(ValueError, match="extra"):
+        with pytest.raises(UnconvertableRequirementError, match="extra"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     def test_marker_mixing_extra_and_an_environment_condition_raises(self) -> None:
         entry = 'requests>=2.0.0; extra == "foo" and python_version >= "3.8"'
 
-        with pytest.raises(ValueError, match="extra"):
+        with pytest.raises(UnconvertableRequirementError, match="extra"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     def test_reversed_extra_clause_still_raises(self) -> None:
         entry = 'requests>=2.0.0; "foo" == extra'
 
-        with pytest.raises(ValueError, match="extra"):
+        with pytest.raises(UnconvertableRequirementError, match="extra"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     def test_extra_clause_using_in_still_raises_the_extra_error(self) -> None:
@@ -504,13 +514,13 @@ class TestMarkers:
         """
         entry = 'requests>=2.0.0; "foo" in extra'
 
-        with pytest.raises(ValueError, match="extra"):
+        with pytest.raises(UnconvertableRequirementError, match="extra"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     def test_platform_machine_marker_raises(self) -> None:
         entry = 'requests>=2.0.0; platform_machine == "x86_64"'
 
-        with pytest.raises(ValueError, match="platform_machine"):
+        with pytest.raises(UnconvertableMarkerError, match="platform_machine"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     @pytest.mark.parametrize(
@@ -525,25 +535,25 @@ class TestMarkers:
     def test_other_unmapped_marker_keys_raise(self, key: str) -> None:
         entry = f'requests>=2.0.0; {key} == "whatever"'
 
-        with pytest.raises(ValueError, match=key):
+        with pytest.raises(UnconvertableMarkerError, match=key):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     def test_virtual_package_inequality_marker_raises(self) -> None:
         entry = 'requests>=2.0.0; os_name != "nt"'
 
-        with pytest.raises(ValueError, match="os_name"):
+        with pytest.raises(UnconvertableMarkerError, match="os_name"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     def test_virtual_package_marker_rejects_an_ordered_comparator(self) -> None:
         entry = 'requests>=2.0.0; sys_platform >= "linux"'
 
-        with pytest.raises(ValueError, match="sys_platform"):
+        with pytest.raises(UnconvertableMarkerError, match="sys_platform"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     def test_virtual_package_marker_rejects_an_unmapped_value(self) -> None:
         entry = 'requests>=2.0.0; sys_platform == "cygwin"'
 
-        with pytest.raises(ValueError, match="cygwin"):
+        with pytest.raises(UnconvertableMarkerError, match="cygwin"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     def test_python_version_literal_with_a_patch_segment_raises(self) -> None:
@@ -553,50 +563,68 @@ class TestMarkers:
         """
         entry = 'requests>=2.0.0; python_version == "3.9.1"'
 
-        with pytest.raises(ValueError, match="major.minor"):
+        with pytest.raises(UnconvertableMarkerError, match="major.minor"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     def test_python_version_literal_with_only_a_major_segment_raises(self) -> None:
         entry = 'requests>=2.0.0; python_version == "3"'
 
-        with pytest.raises(ValueError, match="major.minor"):
+        with pytest.raises(UnconvertableMarkerError, match="major.minor"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     def test_python_version_rejects_the_compatible_release_comparator(self) -> None:
         entry = 'requests>=2.0.0; python_version ~= "3.9"'
 
-        with pytest.raises(ValueError, match="python_version"):
+        with pytest.raises(UnconvertableMarkerError, match="python_version"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     def test_full_version_rejects_the_compatible_release_comparator(self) -> None:
         entry = 'requests>=2.0.0; python_full_version ~= "3.9.0"'
 
-        with pytest.raises(ValueError, match="python_full_version"):
+        with pytest.raises(UnconvertableMarkerError, match="python_full_version"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     def test_in_marker_raises(self) -> None:
         entry = 'requests>=2.0.0; python_version in "3.9"'
 
-        with pytest.raises(ValueError, match="'in'/'not in'"):
+        with pytest.raises(UnconvertableMarkerError, match="'in'/'not in'"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     def test_not_in_marker_raises(self) -> None:
         entry = 'requests>=2.0.0; python_version not in "3.9"'
 
-        with pytest.raises(ValueError, match="'in'/'not in'"):
+        with pytest.raises(UnconvertableMarkerError, match="'in'/'not in'"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     def test_reversed_in_marker_raises(self) -> None:
         entry = 'requests>=2.0.0; "3.9" not in python_version'
 
-        with pytest.raises(ValueError, match="'in'/'not in'"):
+        with pytest.raises(UnconvertableMarkerError, match="'in'/'not in'"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
     def test_unsupported_marker_error_names_the_entry(self) -> None:
         entry = 'requests>=2.0.0; platform_machine == "x86_64"'
 
-        with pytest.raises(ValueError, match=repr(entry)):
+        with pytest.raises(UnconvertableMarkerError, match=repr(entry)):
             pep508_to_matchspec(entry, (aggregator_mapper,))
+
+    def test_unconvertable_marker_error_logs_only_once(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """A marker conversion failure is one logical error -- re-raising it
+        with `entry` added for context must not construct a second
+        `UnconvertableMarkerError` on top of the one `marker_condition`
+        already raised (and thus already logged).
+        """
+        entry = 'requests>=2.0.0; platform_machine == "x86_64"'
+
+        with (
+            caplog.at_level(logging.WARNING, logger="reroll.unconvertable"),
+            pytest.raises(UnconvertableMarkerError),
+        ):
+            pep508_to_matchspec(entry, (aggregator_mapper,))
+
+        assert len(caplog.records) == 1
 
 
 # --------------------------------------------------------------------------
@@ -613,13 +641,13 @@ class TestRattlerValidation:
         """
         mappers = (static_mapper({"badpkg": "bad[name"}), aggregator_mapper)
 
-        with pytest.raises(ValueError, match="badpkg"):
+        with pytest.raises(UnconvertableRequirementError, match="badpkg"):
             pep508_to_matchspec("badpkg", mappers)
 
     def test_a_mapper_returning_an_empty_conda_name_raises_a_value_error(self) -> None:
         mappers = (static_mapper({"badpkg": ""}), aggregator_mapper)
 
-        with pytest.raises(ValueError, match="badpkg"):
+        with pytest.raises(UnconvertableRequirementError, match="badpkg"):
             pep508_to_matchspec("badpkg", mappers)
 
 

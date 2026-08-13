@@ -8,12 +8,19 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict
 
 from reroll.default_mappers import default_mappers
+from reroll.errors import (
+    RerollError,
+    RerollInvalidWheelError,
+    RerollRuntimeError,
+    RerollScopeError,
+    RerollUnconvertableError,
+    UnresolvedCondaNameError,
+)
 from reroll.name_mapping import (
     Candidate,
     CandidateSource,
     NameMapper,
     NameMappers,
-    UnresolvedCandidates,
     aggregator_mapper,
     map_name,
     static_mapper,
@@ -24,7 +31,12 @@ __all__ = [
     "CandidateSource",
     "NameMapper",
     "NameMappers",
-    "UnresolvedCandidates",
+    "RerollError",
+    "RerollInvalidWheelError",
+    "RerollRuntimeError",
+    "RerollScopeError",
+    "RerollUnconvertableError",
+    "UnresolvedCondaNameError",
     "WheelRecord",
     "aggregator_mapper",
     "default_mappers",

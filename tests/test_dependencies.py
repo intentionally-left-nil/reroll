@@ -10,6 +10,7 @@ from reroll.dependencies import WheelDependencies, wheel_dependencies
 from reroll.dependencies.extras import extra_marker_entry
 from reroll.dependencies.python import python_dependencies
 from reroll.dependencies.requires_dist import strip_interpreter_requirements
+from reroll.errors import PythonRangeMismatchError, UnconvertableRequirementError
 from reroll.filename import WheelConfig
 from reroll.name_mapping import NameMappers, aggregator_mapper, static_mapper
 from reroll.wheel_metadata import WheelMetadata
@@ -54,14 +55,7 @@ def _dependencies(
     *,
     allow_pre: bool = False,
 ) -> WheelDependencies:
-    """`wheel_dependencies`'s result, asserted non-`None` -- for tests that
-    only exercise the solvable case and want to access `.depends`/
-    `.extra_depends` without a separate `is not None` narrowing assertion
-    of their own.
-    """
-    result = wheel_dependencies(config, metadata, mappers, allow_pre=allow_pre)
-    assert result is not None
-    return result
+    return wheel_dependencies(config, metadata, mappers, allow_pre=allow_pre)
 
 
 # --------------------------------------------------------------------------
@@ -193,12 +187,15 @@ class TestRequiresPythonTightening:
     ) -> None:
         config = _config(interpreter="cp39", abi="cp39")
 
-        with caplog.at_level(logging.WARNING, logger="reroll.dependencies"):
-            result = python_dependencies(config, _metadata(requires_python=">=3.10"))
+        with (
+            caplog.at_level(logging.WARNING, logger="reroll.unconvertable"),
+            pytest.raises(PythonRangeMismatchError) as exc_info,
+        ):
+            python_dependencies(config, _metadata(requires_python=">=3.10"))
 
-        assert result is None
-        assert "tinylib" in caplog.text
-        assert ">=3.10" in caplog.text
+        assert "tinylib" in str(exc_info.value)
+        assert ">=3.10" in str(exc_info.value)
+        assert caplog.records
 
     def test_python_abi_is_unaffected_by_requires_python(self) -> None:
         """`python_abi` is derived from the wheel's own filename tag, not
@@ -342,7 +339,8 @@ class TestWheelDependencies:
         config = _config(interpreter="cp39", abi="cp39")
         metadata = _metadata(requires_python=">=3.10")
 
-        assert wheel_dependencies(config, metadata, (aggregator_mapper,)) is None
+        with pytest.raises(PythonRangeMismatchError):
+            wheel_dependencies(config, metadata, (aggregator_mapper,))
 
     def test_simple_requires_dist_entries_come_before_python(self) -> None:
         """Matches the field order real conda-pypi output uses (§3.5 of
@@ -403,14 +401,14 @@ class TestWheelDependencies:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=('requests>=2.0.0; extra == "foo" or extra == "bar"',))
 
-        with pytest.raises(ValueError, match="extra"):
+        with pytest.raises(UnconvertableRequirementError, match="extra"):
             wheel_dependencies(config, metadata, (aggregator_mapper,))
 
     def test_rejects_the_whole_record_for_an_unrepresentable_entry(self) -> None:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=("requests==1.0.0+local",))
 
-        with pytest.raises(ValueError, match="local version label"):
+        with pytest.raises(UnconvertableRequirementError, match="local version label"):
             wheel_dependencies(config, metadata, (aggregator_mapper,))
 
     def test_uses_mappers_to_convert_dependency_names(self) -> None:
@@ -519,5 +517,5 @@ class TestWheelDependenciesExtras:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=('requests==1.0.0+local; extra == "standard"',))
 
-        with pytest.raises(ValueError, match="local version label"):
+        with pytest.raises(UnconvertableRequirementError, match="local version label"):
             wheel_dependencies(config, metadata, (aggregator_mapper,))

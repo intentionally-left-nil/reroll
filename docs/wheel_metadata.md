@@ -3,16 +3,16 @@
 * Supported inputs must include: A pydantic object with just the important fields (to support data in databases), or the METADATA contents as a string
 * The Name and version must match the filename
 * Use metadata.parse_email to parse the metadata file.
-* Items which are supposed to appear once (like Name), but actually appear multiple times with unique values should be treated as an error, not silently discarded.
+* Items which are supposed to appear once (like Name), but actually appear multiple times with unique values should raise `InvalidMetadataError`, not silently discarded.
 * Reroll will first try to use the packaging module's modern parsing and validation to handle `Requires-Dist` and `Requires-Python`, matching how modern pip parses the fields
 * Upon validation failure, reroll will implement uv's `LenientRequirement` fixups and try again
 * If the LenientRequirement succeeds, reroll will use that packaging.Requirement, and emit a debug message with the fixup note
-* Reroll will reject any wheel that cannot be parsed by LenientRequirement
+* Reroll will raise `InvalidRequirementError` (for `Requires-Dist`) or `InvalidVersionSpecifierError` (for `Requires-Python`) for any wheel that cannot be parsed by LenientRequirement
 * LenientRequirement coding will be implemented in a "copy the behavior identically as much as possible, cite UV's MIT license", so that future updates can stay in sync
 * For `Provides-Extra`, each string will be handled with `canonicalize_name` but without validate=True (unlike the name field). Therefore, `Provides-Extra` will not cause metadata parsing to fail.
 * For `license-expression`, it must pass the validator to be accepted into the struct. If the entry is not valid, it will be replaced by `None` instead of failing (with a debug message)
 * Name and version are required, other fields are optional
-* Failure to parse one of the fields we are tracking corresponds an overall failure, not a silent default value, except for `License-Expression` and `Provides-Extra` as called out above.
+* Failure to parse one of the fields we are tracking raises a `RerollInvalidWheelError` subclass, not a silent default value, except for `License-Expression` and `Provides-Extra` as called out above.
 
 # Decision explanation
 Reroll wants to support most of the python wheel ecosystem from Python 3.4 onwards. By definition, this means that we will need to handle wheels that were historically installable by pip. Some of these wheels conformed to an earlier spec, and some of these wheels were out-of-spec but pip had lower thresholds.
@@ -43,7 +43,7 @@ There are several versions of the METADATA spec, so we will need to be able to h
 
 In practice, this means we need to support:
 Embedded null characters. Windows line endings, Mac line endings, Unix line endings.
-When parsing the fields, (e.g. for dependencies) we need to reject files which have non-ascii entries for the fields we care about
+When parsing the fields, (e.g. for dependencies) we need to raise `InvalidRequirementError` for files which have non-ascii entries for the fields we care about
 
 In the actual pypi corpus, embedded nulls and different line endings have been observed.
 
@@ -111,7 +111,7 @@ This is again a case of back-compat and how flexible to be with the requirements
 
 [parse_email](https://github.com/pypa/packaging/blob/main/src/packaging/metadata.py#L360) takes a relaxed posture. It handles some encoding inconsistencies, and otherwise handles some of the fields we don't care about (like keywords and project url's) and it normalizes the casing, but otherwise leaves things pretty-much alone
 
-parse_email does have a notion of known string fields and raw fields. This creates a fun edge case - if a METADATA file contains multiple `Requires-Python` fields (for example), parse_email will detect this is not a string, and instead it will route it to the unparsed field. This leads us to the simple rule of treating this as an error, which mirrors how the api for parse_email is supposed to be used. The pseudo-logic is that if the field exists in the parsed data set, it is present. If it is not present, we need to check the unparsed data to see if it was omitted, or if it exists multiple times. If it exists multiple times, we further need to de-duplicate the entries. After deduplication, there might only be one unique value, in which case this should be treated as VALID. Otherwise, if there are zero entries, it didn't exist (depending on the field that might be okay). If there are multiple unique values then that's a spec violation and the METADATA should be discarded
+parse_email does have a notion of known string fields and raw fields. This creates a fun edge case - if a METADATA file contains multiple `Requires-Python` fields (for example), parse_email will detect this is not a string, and instead it will route it to the unparsed field. This leads us to the simple rule of raising `InvalidMetadataError`, which mirrors how the api for parse_email is supposed to be used. The pseudo-logic is that if the field exists in the parsed data set, it is present. If it is not present, we need to check the unparsed data to see if it was omitted, or if it exists multiple times. If it exists multiple times, we further need to de-duplicate the entries. After deduplication, there might only be one unique value, in which case this should be treated as VALID. Otherwise, if there are zero entries, it didn't exist (depending on the field that might be okay). If there are multiple unique values then that's a spec violation and raises `InvalidMetadataError`
 
 [Metadata(validate=true/false)](https://github.com/pypa/packaging/blob/main/src/packaging/metadata.py#L814) uses parse_email, and then adds extra checks on top of it. It sees whether the fields are allowed by the `Metadata-Version`. If `validate` is passed in, it eagerly validates all fields, otherwise they are validated at access time
 

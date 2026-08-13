@@ -7,7 +7,7 @@ conda [MatchSpec (CEP-29)](https://conda.org/learn/ceps/cep-0029/).
 # Decisions
 * Per CEP-29, ~= is deprecrecated. Any instance of  ~= should be expanded to the appropriate range specifier
 * Pre-release tags (dev, devN, alpha, beta, rc and their short-forms) are not allowed for filenames or dependencies, unless specifically opted into (via a user-controllable --allow-pre flag)
-* Matchspec cannot easily handle virtual packages, especially `!=`. Therefore, these fields will fail at the matchspec level. Callers should use e.g. subdir splitting to avoid failures
+* Matchspec cannot easily handle virtual packages, especially `!=`. Therefore, these fields raise `UnconvertableMarkerError`. Callers should use e.g. subdir splitting to avoid failures
 
 # Name
 The name portion of a MatchSpec starts from the pypi name, normalized per
@@ -36,11 +36,11 @@ Pip supports more tweaks on the version than conda natively supports. This inclu
 
 In addition, the Conda version syntax, specified by [CEP-33](https://conda.org/learn/ceps/cep-0033) is different than PEP-440. For example: `1.0.0rc1` for pypi is most closely translated as `1.0.0.rc1` (note the period) for conda. Another example is that `1.0-1` PEP440 shorthand for `1.0.post1`.
 
-Some of these we can dismiss out of hand. Dependencies with direct URL's are to be reject out-of-hand. It shouldn't occur and it's natural to emit an log item and stop processing the wheel when this happens. Presumably the author is deliberately trying to access another registry,
+Some of these we can dismiss out of hand. Dependencies with direct URL's are to be reject out-of-hand. It shouldn't occur, and reroll raises `UnconvertableRequirementError` when this happens. Presumably the author is deliberately trying to access another registry,
 but that wouldn't know anything about conda and also it's a security risk. Rejecting the entire wheel, rather than silently stripping the URL brings visibility to the problem.
 
 Local tags are by-design not intended to be uploaded to a repository. PyPI will not allow a package with a local tag to be uploaded. That also means that if a package has a `Requires-Dist: package 1.0.0+awesome`, this would never be able to resolve from a wheel on PyPI.
-Therefore, we can also reject local tags.
+Therefore, we can also raise `UnconvertableRequirementError` for local tags.
 
 ## Version conversion algorithm
 1. start with a packaging.version.Version object.
@@ -58,7 +58,7 @@ Conda doesn't have this support, but the pre-release would be a lower-priority m
 
 Even in this label case, the label is not part of the dependency specification. There's no conda way to specify `mypackage/label/dev::mypackage==1.0.0.rc2` in order to get an rc package.
 
-Therefore, putting all this together leads to a strong reason to reject alpha suffixes in releases. It would probably be okay to strip them, under the assumption that the code in a final release trumps a release candidate. However, for the sake of clarity, clear failure cases (rather than hidden changes), it's better to initially reject such dependencies, see if it actually occurs, and adjust from there.
+Therefore, putting all this together leads to a strong reason to raise `UnconvertableRequirementError` for alpha suffixes in releases. It would probably be okay to strip them, under the assumption that the code in a final release trumps a release candidate. However, for the sake of clarity, clear failure cases (rather than hidden changes), it's better to initially raise `UnconvertableRequirementError` for such dependencies, see if it actually occurs, and adjust from there.
 
 To mimic the concept of labels, a repodata author might intend for a certain channel to contain -alpha, -beta, -rc packages in it. In this case an `allow_pre` flag can toggle this behavior
 One final note is that `allow_pre` will apply equally to both package versions, as well as version dependencies. This keeps things consistent (channels can either have pre-release packages and rely on other pre-release packages, or they can't)
@@ -71,7 +71,7 @@ See [wheel_to_conda_dependencies.md's Dealing with extras](./wheel_to_conda_depe
 
 ## Extras name normalization
 `Provides-Extra` must match the following specifier: `^[a-z0-9]+(-[a-z0-9]+)*$`. In the pypi ecosystem, this is normalized by applying the same normalization `re.sub(r"[-_.]+", "-", name).lower()` mechanism used for other names.
-The conda CEP for extras has a slightly different regex: `[a-z0-9_.+-]{1,64}`. It doesn't restrict the starting character, it allows `_`, but it also restricts the length to 64 characters. We can therefore create a compliant extras normalizer by running: `canonicalize_name` and then rejecting any extra > 64 characters.
+The conda CEP for extras has a slightly different regex: `[a-z0-9_.+-]{1,64}`. It doesn't restrict the starting character, it allows `_`, but it also restricts the length to 64 characters. We can therefore create a compliant extras normalizer by running: `canonicalize_name` and then raising `UnconvertableRequirementError` for any extra > 64 characters.
 
 ## Requiring a dependency with an extra
 On the flip side, what happens if another package includes `Requires-Dist: fastapi[all]` in their requirements?
@@ -179,5 +179,5 @@ in/not in perform substring matches, instead of exact equality with `==`. Since 
 Conda matchspec doesn't provide a clean mapping to matching this behavior. On first glance, one could try to model `python_version in "3.11"` with the matchspec `packageA[when="python *3.11*"]` 
 However, rattler-py doesn't support a leading `*` for the version field (this may be a rattler bug) as `VersionSpec('*3.1*')` throws an exception. This bug has been filed as https://github.com/conda/rattler/issues/2679
 
-Until this is fixed, we will NOT support `in/not in` with matchspec. Instead, the conversion code should raise an error if that is present.
+Until this is fixed, we will NOT support `in/not in` with matchspec. Instead, the conversion code raises `UnconvertableMarkerError` if that is present.
 Potentially this could be worked around for python_version by means of exhaustive expansion of the possibilties, pre-computing the actual matches, and then selecting those. However that's a lot of work and so the initial decision is just to not allow `in/not in`

@@ -12,13 +12,25 @@ from packaging.specifiers import SpecifierSet
 from packaging.tags import Tag
 from packaging.utils import NormalizedName
 from packaging.version import Version
-from pydantic import ValidationError
 
+from reroll.errors import (
+    InvalidAbiTagError,
+    InvalidCondaNameError,
+    InvalidInterpreterTagError,
+    InvalidPythonRequirementRangeError,
+    UnresolvedCondaNameError,
+    UnsupportedFreeThreadedVersionError,
+    UnsupportedInterpreterError,
+    UnsupportedInterpreterVersionError,
+    UnsupportedPlatformError,
+)
 from reroll.filename import (
     AbiKind,
     Arch,
+    InvalidFilenameError,
     PlatformFamily,
     PythonRequirement,
+    UnsupportedPrereleaseError,
     WheelConfig,
     parse_filename,
     supported_archs,
@@ -88,21 +100,21 @@ class TestInterpreterValidator:
         ids=["ip313", "pp310", "gp313"],
     )
     def test_rejects_non_cpython_interpreter_prefix(self, interpreter: str) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidInterpreterTagError):
             _config(interpreter=interpreter)
 
     @pytest.mark.parametrize("interpreter", ["py2", "cp27", "py4", "cp40"])
     def test_rejects_non_python3_major(self, interpreter: str) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(UnsupportedInterpreterError):
             _config(interpreter=interpreter)
 
     def test_rejects_cp_without_a_minor(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidInterpreterTagError):
             _config(interpreter="cp3")
 
     @pytest.mark.parametrize("interpreter", ["py", "cp", "py3x"])
     def test_rejects_missing_or_non_digit_version(self, interpreter: str) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidInterpreterTagError):
             _config(interpreter=interpreter)
 
 
@@ -143,16 +155,16 @@ class TestPythonVersionFloorTable:
         _config(interpreter=interpreter, abi=abi)
 
     @pytest.mark.parametrize(
-        ("interpreter", "abi"),
+        ("interpreter", "abi", "expected"),
         [
-            ("py32", "cp37"),
-            ("py32", "abi3"),
-            ("cp3", "none"),
-            ("cp3", "abi3"),
-            ("cp32", "none"),
-            ("cp32", "cp32"),
-            ("cp30", "abi3"),
-            ("cp31", "abi3"),
+            ("py32", "cp37", InvalidAbiTagError),
+            ("py32", "abi3", InvalidAbiTagError),
+            ("cp3", "none", InvalidInterpreterTagError),
+            ("cp3", "abi3", InvalidInterpreterTagError),
+            ("cp32", "none", UnsupportedInterpreterVersionError),
+            ("cp32", "cp32", UnsupportedInterpreterVersionError),
+            ("cp30", "abi3", InvalidAbiTagError),
+            ("cp31", "abi3", InvalidAbiTagError),
         ],
         ids=[
             "py32-cp37",
@@ -165,14 +177,14 @@ class TestPythonVersionFloorTable:
             "cp31-abi3",
         ],
     )
-    def test_disallowed(self, interpreter: str, abi: str) -> None:
+    def test_disallowed(self, interpreter: str, abi: str, expected: type[Exception]) -> None:
         """The `abi3` rows here are disallowed by the blanket
         `WheelConfig` rejection of any raw `abi3`/`abi3t` tag (regardless of
         interpreter) -- not by the floor logic `TestAbi3FloorIsPoint2`
-        exercises against `explode_abi3`. Both routes land on the same
-        `ValidationError`.
+        exercises against `explode_abi3`. Both routes land on
+        `InvalidAbiTagError`.
         """
-        with pytest.raises(ValidationError):
+        with pytest.raises(expected):
             _config(interpreter=interpreter, abi=abi)
 
 
@@ -186,12 +198,12 @@ class TestCpythonBelow34Rejected:
 
     @pytest.mark.parametrize("minor", [0, 1, 2, 3])
     def test_rejects_low_minor_with_none_abi(self, minor: int) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(UnsupportedInterpreterVersionError):
             _config(interpreter=f"cp3{minor}", abi="none")
 
     @pytest.mark.parametrize("minor", [0, 1, 2, 3])
     def test_rejects_low_minor_with_matching_versioned_abi(self, minor: int) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(UnsupportedInterpreterVersionError):
             _config(interpreter=f"cp3{minor}", abi=f"cp3{minor}")
 
     def test_3_4_itself_is_the_floor_for_none_and_versioned_pins(self) -> None:
@@ -222,7 +234,7 @@ class TestAbiValidator:
         that floor-legality question belongs to `explode_abi3`
         (`TestAbi3FloorIsPoint2`), not to `WheelConfig`.
         """
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidAbiTagError):
             _config(interpreter=interpreter, abi=abi)
 
     @pytest.mark.parametrize("abi", ["cp313", "cp313t"])
@@ -234,21 +246,21 @@ class TestAbiValidator:
         """Only `d` (debug) blocks the wheel -- see `TestAbiBuildSuffixes`
         below for the full `d`/`m`/`u`/`t` combination matrix.
         """
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidAbiTagError):
             _config(interpreter="cp313", abi=abi)
 
     @pytest.mark.parametrize("abi", ["pypy310_pp73", "graalpy_38_native"])
     def test_rejects_non_cpython_abi(self, abi: str) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidAbiTagError):
             _config(interpreter="cp313", abi=abi)
 
     @pytest.mark.parametrize("abi", ["abi4", "abi3x"])
     def test_rejects_abi_that_is_not_abi3_or_abi3t(self, abi: str) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidAbiTagError):
             _config(interpreter="cp313", abi=abi)
 
     def test_rejects_versioned_abi_with_non_python3_major(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidAbiTagError):
             _config(interpreter="cp313", abi="cp208")
 
 
@@ -295,7 +307,7 @@ class TestAbiBuildSuffixes:
     def test_d_blocks_the_wheel_regardless_of_other_flags(self, flags: frozenset[str]) -> None:
         suffix = "".join(flag for flag in _ABI_BUILD_FLAGS if flag in flags)
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidAbiTagError):
             _config(interpreter="cp313", abi=f"cp313{suffix}")
 
     @pytest.mark.parametrize("flags", _COMBOS_WITHOUT_D, ids=_combo_id)
@@ -365,26 +377,26 @@ class TestPlatformValidator:
         assert _config(platform=platform, arch=arch).platform == platform
 
     def test_rejects_musllinux(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(UnsupportedPlatformError):
             _config(platform="musllinux_1_2_x86_64", arch=Arch.X86_64)
 
     @pytest.mark.parametrize("platform", ["linux_x86_64", "linux_aarch64"])
     def test_rejects_bare_linux(self, platform: str) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(UnsupportedPlatformError):
             _config(platform=platform, arch=Arch.X86_64)
 
     @pytest.mark.parametrize("platform", ["manylinux_2_17_i686", "win32", "macosx_10_9_i386"])
     def test_rejects_32bit(self, platform: str) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(UnsupportedPlatformError):
             _config(platform=platform, arch=Arch.X86_64)
 
     def test_rejects_win_ia64(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(UnsupportedPlatformError):
             _config(platform="win_ia64", arch=Arch.X86_64)
 
     @pytest.mark.parametrize("arch_suffix", ["ppc64le", "s390x", "riscv64", "loongarch64", "ppc64"])
     def test_rejects_unsupported_linux_arches(self, arch_suffix: str) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(UnsupportedPlatformError):
             _config(platform=f"manylinux_2_17_{arch_suffix}", arch=Arch.X86_64)
 
     @pytest.mark.parametrize(
@@ -400,17 +412,17 @@ class TestPlatformValidator:
         ],
     )
     def test_rejects_legacy_mac_formats(self, platform: str) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(UnsupportedPlatformError):
             _config(platform=platform, arch=Arch.X86_64)
 
     @pytest.mark.parametrize("platform", ["ios_13_0_arm64_iphoneos", "android_21_arm64_v8a"])
     def test_rejects_mobile_platforms(self, platform: str) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(UnsupportedPlatformError):
             _config(platform=platform, arch=Arch.ARM64)
 
     @pytest.mark.parametrize("platform", ["emscripten_1_0_wasm32", "wasi_0_0_wasm32"])
     def test_rejects_web_platforms(self, platform: str) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(UnsupportedPlatformError):
             _config(platform=platform, arch=Arch.X86_64)
 
 
@@ -434,11 +446,11 @@ class TestInterpreterAbiPairing:
 
     @pytest.mark.parametrize("abi", ["abi3", "cp313", "cp313t"])
     def test_rejects_generic_interpreter_with_non_none_abi(self, abi: str) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidAbiTagError):
             _config(interpreter="py3", abi=abi)
 
     def test_rejects_versioned_abi_minor_mismatch(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidAbiTagError):
             _config(interpreter="cp313", abi="cp312")
 
     def test_rejects_abi3_regardless_of_floor(self) -> None:
@@ -448,11 +460,11 @@ class TestInterpreterAbiPairing:
         (`TestAbi3FloorIsPoint2`, tested against `explode_abi3`) *and*
         never a legal `WheelConfig` input at all.
         """
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidAbiTagError):
             _config(interpreter="cp31", abi="abi3")
 
     def test_rejects_abi3t_regardless_of_floor(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidAbiTagError):
             _config(interpreter="cp310", abi="abi3t")
 
     def test_rejects_versioned_free_threaded_below_313(self) -> None:
@@ -461,7 +473,7 @@ class TestInterpreterAbiPairing:
         ABI below that minor is rejected the same way `abi3t` is rejected
         below its own 3.15 floor.
         """
-        with pytest.raises(ValidationError):
+        with pytest.raises(UnsupportedFreeThreadedVersionError):
             _config(interpreter="cp39", abi="cp39t")
 
 
@@ -472,15 +484,15 @@ class TestInterpreterAbiPairing:
 
 class TestArchMembership:
     def test_any_platform_requires_arch_none(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(UnsupportedPlatformError):
             _config(platform="any", arch=Arch.X86_64)
 
     def test_non_any_platform_requires_arch_not_none(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(UnsupportedPlatformError):
             _config(platform="manylinux_2_17_x86_64", arch=None)
 
     def test_arch_must_be_in_supported_archs(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(UnsupportedPlatformError):
             _config(platform="manylinux_2_17_x86_64", arch=Arch.ARM64)
 
     def test_universal2_accepts_either_arch(self) -> None:
@@ -595,11 +607,11 @@ class TestMinorRange:
         `(floor, ceiling)` pair can represent "3.8, then 3.10 onward, but
         not 3.9", so this is rejected rather than silently approximated.
         """
-        with pytest.raises(ValueError, match="not a contiguous"):
+        with pytest.raises(InvalidPythonRequirementRangeError, match="not a contiguous"):
             minor_range(SpecifierSet(">=3.8,!=3.9.*,<3.12"))
 
     def test_no_satisfying_minor_is_rejected(self) -> None:
-        with pytest.raises(ValueError, match="not a contiguous"):
+        with pytest.raises(InvalidPythonRequirementRangeError, match="not a contiguous"):
             minor_range(SpecifierSet("<3.0"))
 
 
@@ -907,29 +919,33 @@ class TestParseFilename:
         assert len(configs) == 2
         assert {c.arch for c in configs} == {Arch.X86_64, Arch.ARM64}
 
-    def test_unparseable_filename_returns_empty_tuple(self) -> None:
-        assert parse_filename("not-a-wheel-filename", mappers=(aggregator_mapper,)) == ()
+    def test_unparseable_filename_raises(self) -> None:
+        with pytest.raises(InvalidFilenameError):
+            parse_filename("not-a-wheel-filename", mappers=(aggregator_mapper,))
 
-    def test_unparseable_filename_logs_at_debug(self, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level(logging.DEBUG, logger="reroll.filename"):
+    def test_unparseable_filename_logs_at_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        with (
+            caplog.at_level(logging.WARNING, logger="reroll.invalid"),
+            pytest.raises(InvalidFilenameError),
+        ):
             parse_filename("not-a-wheel-filename", mappers=(aggregator_mapper,))
 
         assert "unparseable" in caplog.text
 
-    def test_all_tags_unsupported_returns_empty_tuple(self) -> None:
-        assert (
+    def test_all_tags_unsupported_raises(self) -> None:
+        with pytest.raises(UnsupportedPlatformError):
             parse_filename(
                 "tinylib-1.2.3-cp313-cp313-musllinux_1_2_x86_64.whl", mappers=(aggregator_mapper,)
             )
-            == ()
-        )
 
-    def test_rejection_logs_validation_errors_at_debug(
-        self, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        with caplog.at_level(logging.DEBUG, logger="reroll.filename"):
+    def test_rejection_logs_at_debug(self, caplog: pytest.LogCaptureFixture) -> None:
+        with (
+            caplog.at_level(logging.DEBUG, logger="reroll.filename"),
+            pytest.raises(UnsupportedPlatformError),
+        ):
             parse_filename(
-                "tinylib-1.2.3-cp313-cp313-musllinux_1_2_x86_64.whl", mappers=(aggregator_mapper,)
+                "tinylib-1.2.3-cp313-cp313-musllinux_1_2_x86_64.whl",
+                mappers=(aggregator_mapper,),
             )
 
         assert "rejected" in caplog.text
@@ -954,13 +970,11 @@ class TestParseFilename:
         assert config.abi == "cp313"
 
     def test_debug_abi_suffix_still_drops_the_wheel_end_to_end(self) -> None:
-        assert (
+        with pytest.raises(InvalidAbiTagError):
             parse_filename(
                 "tinylib-1.2.3-cp313-cp313dmu-manylinux_2_17_x86_64.whl",
                 mappers=(aggregator_mapper,),
             )
-            == ()
-        )
 
     def test_sort_is_deterministic_across_calls(self) -> None:
         filename = "tinylib-1.2.3-py38.py39.py310-none-any.whl"
@@ -1033,13 +1047,12 @@ class TestParseFilenameAbi3Explosion:
         not be exploded and then partially rescued by the unrelated `< 3.4`
         rule the way `cp32-abi3` is.
         """
-        configs = parse_filename(
-            "tinylib-1.2.3-cp31-abi3-manylinux_2_17_x86_64.whl",
-            mappers=(aggregator_mapper,),
-            abi3_upper_bound="3.6",
-        )
-
-        assert configs == ()
+        with pytest.raises(InvalidAbiTagError):
+            parse_filename(
+                "tinylib-1.2.3-cp31-abi3-manylinux_2_17_x86_64.whl",
+                mappers=(aggregator_mapper,),
+                abi3_upper_bound="3.6",
+            )
 
     def test_below_abi3ts_own_floor_is_dropped_entirely(self) -> None:
         """The `abi3t` analogue of the case above -- and the one where
@@ -1048,13 +1061,12 @@ class TestParseFilenameAbi3Explosion:
         free-threaded 3.10+ configs, since nothing else in `WheelConfig`
         enforces `abi3t`'s free-threading-specific 3.15 floor.
         """
-        configs = parse_filename(
-            "tinylib-1.2.3-cp310-abi3t-manylinux_2_17_x86_64.whl",
-            mappers=(aggregator_mapper,),
-            abi3_upper_bound="3.16",
-        )
-
-        assert configs == ()
+        with pytest.raises(InvalidAbiTagError):
+            parse_filename(
+                "tinylib-1.2.3-cp310-abi3t-manylinux_2_17_x86_64.whl",
+                mappers=(aggregator_mapper,),
+                abi3_upper_bound="3.16",
+            )
 
     def test_compressed_and_abi3_expansion_dedupe_together(self) -> None:
         """`cp39.cp310-abi3-*` compressed-expands to two input tags whose
@@ -1108,10 +1120,8 @@ class TestParseFilenameAllowPre:
         ids=["rc", "alpha", "beta", "dev"],
     )
     def test_prerelease_version_rejected_by_default(self, version: str) -> None:
-        assert (
+        with pytest.raises(UnsupportedPrereleaseError):
             parse_filename(f"tinylib-{version}-py3-none-any.whl", mappers=(aggregator_mapper,))
-            == ()
-        )
 
     @pytest.mark.parametrize(
         "version",
@@ -1137,17 +1147,19 @@ class TestParseFilenameAllowPre:
 
         assert config.version == Version("1.2.3.post1")
 
-    def test_prerelease_rejection_logs_at_warning(self, caplog: pytest.LogCaptureFixture) -> None:
-        with caplog.at_level(logging.WARNING, logger="reroll.filename"):
+    def test_prerelease_rejection_logs_at_info(self, caplog: pytest.LogCaptureFixture) -> None:
+        with (
+            caplog.at_level(logging.INFO, logger="reroll.scope"),
+            pytest.raises(UnsupportedPrereleaseError),
+        ):
             parse_filename("tinylib-1.2.3rc1-py3-none-any.whl", mappers=(aggregator_mapper,))
 
         assert caplog.records
-        assert all(record.levelno == logging.WARNING for record in caplog.records)
+        assert all(record.levelno == logging.INFO for record in caplog.records)
 
     def test_allow_pre_defaults_to_false(self) -> None:
-        assert (
-            parse_filename("tinylib-1.2.3rc1-py3-none-any.whl", mappers=(aggregator_mapper,)) == ()
-        )
+        with pytest.raises(UnsupportedPrereleaseError):
+            parse_filename("tinylib-1.2.3rc1-py3-none-any.whl", mappers=(aggregator_mapper,))
 
 
 # --------------------------------------------------------------------------
@@ -1213,14 +1225,15 @@ class TestParseFilenameNameMapping:
         assert {c.normalized_pypi_name for c in configs} == {"tinylib"}
         assert {c.conda_name for c in configs} == {"python-tinylib"}
 
-    def test_unresolved_candidates_returns_empty_tuple(self) -> None:
+    def test_unresolved_candidates_raises(self) -> None:
         def _no_opinion(
             name: NormalizedName, candidates: Sequence[Candidate]
         ) -> str | Sequence[Candidate]:
             del name
             return candidates
 
-        assert parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(_no_opinion,)) == ()
+        with pytest.raises(UnresolvedCondaNameError):
+            parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(_no_opinion,))
 
     def test_unresolved_candidates_logs_at_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         def _no_opinion(
@@ -1229,20 +1242,24 @@ class TestParseFilenameNameMapping:
             del name
             return candidates
 
-        with caplog.at_level(logging.WARNING, logger="reroll.filename"):
+        with (
+            caplog.at_level(logging.WARNING, logger="reroll.unconvertable"),
+            pytest.raises(UnresolvedCondaNameError),
+        ):
             parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(_no_opinion,))
 
         assert caplog.records
         assert all(record.levelno == logging.WARNING for record in caplog.records)
 
-    def test_overlong_conda_name_returns_empty_tuple(self) -> None:
+    def test_overlong_conda_name_raises(self) -> None:
         def _mapper(
             name: NormalizedName, candidates: Sequence[Candidate]
         ) -> str | Sequence[Candidate]:
             del name, candidates
             return "a" * 65
 
-        assert parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(_mapper,)) == ()
+        with pytest.raises(InvalidCondaNameError):
+            parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(_mapper,))
 
     def test_overlong_conda_name_logs_at_debug(self, caplog: pytest.LogCaptureFixture) -> None:
         def _mapper(
@@ -1251,7 +1268,10 @@ class TestParseFilenameNameMapping:
             del name, candidates
             return "a" * 65
 
-        with caplog.at_level(logging.DEBUG, logger="reroll.filename"):
+        with (
+            caplog.at_level(logging.DEBUG, logger="reroll.filename"),
+            pytest.raises(InvalidCondaNameError),
+        ):
             parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(_mapper,))
 
         assert "rejected" in caplog.text

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 from packaging.utils import canonicalize_name
 
+from reroll.errors import ConfigLoadError
 from reroll.grayskull_mapper import grayskull_mapper
 from reroll.name_mapping import (
     Candidate,
@@ -165,6 +166,26 @@ class TestGrayskullMapperMalformedEntry:
                 mapper="grayskull_config",
             ),
         )
+
+
+# --------------------------------------------------------------------------
+# Load failures
+# --------------------------------------------------------------------------
+
+
+class TestGrayskullMapperLoadFailures:
+    def test_missing_config_file_raises_config_load_error(self, tmp_path: Path) -> None:
+        missing = tmp_path / "does-not-exist.yaml"
+
+        with pytest.raises(ConfigLoadError, match="does-not-exist.yaml"):
+            grayskull_mapper(missing)
+
+    def test_malformed_yaml_raises_config_load_error(self, tmp_path: Path) -> None:
+        config_file = tmp_path / "invalid.yaml"
+        config_file.write_text("annoy: [unterminated\n")
+
+        with pytest.raises(ConfigLoadError):
+            grayskull_mapper(config_file)
 
 
 # --------------------------------------------------------------------------

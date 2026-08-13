@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 from packaging.utils import canonicalize_name
 
+from reroll.errors import CacheWriteError, DatabaseError, NetworkFetchError
 from reroll.name_mapping import Candidate, CandidateSource
 from reroll.parselmouth_mapper import (
     BASE_PROBABILITY,
@@ -969,8 +970,21 @@ class TestDownloadRelations:
             "https://example.test", 404, "Not Found", Message(), None
         )
         _install_fake_urlopen(monkeypatch, [not_found])
-        with pytest.raises(urllib.error.HTTPError):
+        with pytest.raises(NetworkFetchError):
             download_relations("https://example.test/relations.jsonl.gz", dest=dest, etag="etag-1")
+
+    def test_connection_errors_are_wrapped(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        dest = tmp_path / "relations.jsonl.gz"
+
+        def _fail_urlopen(*args: object, **kwargs: object) -> None:
+            raise urllib.error.URLError("connection refused")
+
+        monkeypatch.setattr("urllib.request.urlopen", _fail_urlopen)
+
+        with pytest.raises(NetworkFetchError, match="connection refused"):
+            download_relations("https://example.test/relations.jsonl.gz", dest=dest)
 
     def test_missing_etag_header_on_response_is_reported_as_none(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -1117,10 +1131,47 @@ class TestOpenParselmouthDatabase:
 
         monkeypatch.setattr("reroll.parselmouth_mapper.db.shutil.copy2", _boom)
 
-        with pytest.raises(OSError, match="disk full"):
+        with pytest.raises(CacheWriteError, match="disk full"):
             open_parselmouth_database(db_path)
 
         assert list(tmp_path.iterdir()) == []
+
+    def test_a_non_os_error_during_the_final_swap_still_cleans_up_and_propagates(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db_path = tmp_path / "parselmouth.sqlite3"
+        _install_fake_urlopen(monkeypatch, [_FakeHTTPResponse(_gzip_line(_REQUESTS_ROW), "etag-1")])
+
+        def _boom(*_args: object, **_kwargs: object) -> None:
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr("reroll.parselmouth_mapper.db.shutil.copy2", _boom)
+
+        with pytest.raises(RuntimeError, match="boom"):
+            open_parselmouth_database(db_path)
+
+        assert list(tmp_path.iterdir()) == []
+
+    def test_a_build_failure_raises_database_error(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        db_path = tmp_path / "parselmouth.sqlite3"
+        _install_fake_urlopen(monkeypatch, [_FakeHTTPResponse(_gzip_line(_REQUESTS_ROW), "etag-1")])
+
+        def _boom(*_args: object, **_kwargs: object) -> None:
+            raise sqlite3.OperationalError("disk I/O error")
+
+        monkeypatch.setattr("reroll.parselmouth_mapper.db.write_relations", _boom)
+
+        with pytest.raises(DatabaseError, match="disk I/O error"):
+            open_parselmouth_database(db_path)
+
+    def test_an_unreadable_existing_database_raises_database_error(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "parselmouth.sqlite3"
+        db_path.write_text("not a sqlite database")
+
+        with pytest.raises(DatabaseError):
+            open_parselmouth_database(db_path)
 
 
 # --------------------------------------------------------------------------

@@ -8,21 +8,24 @@ from __future__ import annotations
 
 import logging
 
+from packaging.tags import Tag
 from packaging.utils import InvalidWheelFilename, parse_wheel_filename
-from pydantic import ValidationError
 
+from reroll.errors import InvalidFilenameError, RerollError, UnsupportedPrereleaseError
 from reroll.filename.abi3 import explode_abi3
 from reroll.filename.enums import AbiKind, Arch, PlatformFamily
 from reroll.filename.platform import supported_archs
 from reroll.filename.python_requirement import PythonRequirement
 from reroll.filename.wheel_config import WheelConfig
-from reroll.name_mapping import NameMappers, UnresolvedCandidates, map_name
+from reroll.name_mapping import NameMappers, map_name
 
 __all__ = [
     "AbiKind",
     "Arch",
+    "InvalidFilenameError",
     "PlatformFamily",
     "PythonRequirement",
+    "UnsupportedPrereleaseError",
     "WheelConfig",
     "parse_filename",
     "supported_archs",
@@ -38,14 +41,16 @@ def parse_filename(
     abi3_upper_bound: str | None = None,
     allow_pre: bool = False,
 ) -> tuple[WheelConfig, ...]:
-    """Parse a wheel filename into zero or more `WheelConfig`s.
+    """Parse a wheel filename into one or more `WheelConfig`s.
 
-    Never raises for filename input: an unparseable filename or a filename
-    with no supported `(tag, arch)` combination both return `()`, and the
-    reason is logged at `DEBUG`. A mapper chain that raises
-    `UnresolvedCandidates`, or a pre-release version rejected by
-    `allow_pre`, also yield `()`, but are logged at `WARNING` since (unlike
-    the other rejections) they have a concrete, actionable fix.
+    Raises `InvalidFilenameError` for an unparseable filename,
+    `UnsupportedPrereleaseError` for a pre-release version rejected by
+    `allow_pre`, `reroll.errors.UnresolvedCondaNameError` for a PyPI
+    name no mapper resolved, or -- if every `(tag, arch)` combination the
+    filename expands to is individually rejected -- whichever `RerollError`
+    the last of them raised. A filename with *some* supported combinations
+    and some unsupported ones drops the unsupported ones silently (each
+    logged at `DEBUG`) and returns the rest.
 
     `abi3_upper_bound` (a minor-only version string like `"3.15"`) caps how
     far `abi3`/`abi3t` tags are exploded into concrete per-minor tags
@@ -60,35 +65,29 @@ def parse_filename(
     try:
         name, version, build, tags = parse_wheel_filename(filename)
     except InvalidWheelFilename as exc:
-        logger.debug("unparseable wheel filename %r: %s", filename, exc)
-        return ()
+        raise InvalidFilenameError(f"unparseable wheel filename {filename!r}: {exc}") from exc
 
     if not allow_pre and version.is_prerelease:
-        logger.warning(
-            "rejected pre-release version %s for wheel filename %r: allow_pre is not set",
-            version,
-            filename,
+        raise UnsupportedPrereleaseError(
+            f"rejected pre-release version {version} for wheel filename {filename!r}: "
+            "allow_pre is not set"
         )
-        return ()
 
     tags = explode_abi3(tags, abi3_upper_bound=abi3_upper_bound)
 
     # The name is tag-invariant, so this is resolved once,
     # before the tag loop below -- not once per `(tag, arch)` combination.
-    try:
-        conda_name = map_name(name, mappers)
-    except UnresolvedCandidates as exc:
-        logger.warning("unresolved conda name for wheel filename %r: %s", filename, exc)
-        return ()
+    conda_name = map_name(name, mappers)
 
     configs: list[WheelConfig] = []
-    for tag in tags:
+    errors: list[RerollError] = []
+    for tag in sorted(tags, key=_tag_sort_key):
         # An unsupported platform's `supported_archs()` is `()`; without the
         # `or [None]` fallback the loop below would never run for it, and no
-        # rejection reason would be logged. With it, one construction attempt
-        # is made with `arch=None`, which fails the arch-membership validator
-        # with a precise message -- keeping every rejection reason flowing
-        # through the single `ValidationError` logging site below.
+        # rejection reason would be recorded. With it, one construction
+        # attempt is made with `arch=None`, which fails the arch-membership
+        # validator with a precise message -- keeping every rejection
+        # reason flowing through the single `except RerollError` below.
         for arch in supported_archs(tag.platform) or [None]:
             try:
                 configs.append(
@@ -103,14 +102,14 @@ def parse_filename(
                         arch=arch,
                     )
                 )
-            except ValidationError as exc:
+            except RerollError as exc:
                 logger.debug(
-                    "rejected wheel config for %r (tag=%s, arch=%s): %s",
-                    filename,
-                    tag,
-                    arch,
-                    exc.errors(),
+                    "rejected wheel config for %r (tag=%s, arch=%s): %s", filename, tag, arch, exc
                 )
+                errors.append(exc)
+
+    if not configs:
+        raise errors[-1]
 
     # `packaging` returns tags as a frozenset, whose iteration order varies
     # under hash randomization; repodata must be reproducible, so sort
@@ -118,6 +117,10 @@ def parse_filename(
     # frozenset and `supported_archs` returns distinct values.
     configs.sort(key=_sort_key)
     return tuple(configs)
+
+
+def _tag_sort_key(tag: Tag) -> tuple[str, str, str]:
+    return (tag.interpreter, tag.abi, tag.platform)
 
 
 def _sort_key(config: WheelConfig) -> tuple[str, str, str, str]:

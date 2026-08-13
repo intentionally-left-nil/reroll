@@ -7,9 +7,10 @@ from typing import Annotated
 
 from packaging.licenses import InvalidLicenseExpression, canonicalize_license_expression
 from packaging.metadata import RawMetadata, parse_email
-from packaging.utils import canonicalize_name
+from packaging.utils import InvalidName, canonicalize_name
 from pydantic import AfterValidator, BaseModel, ConfigDict, field_validator
 
+from reroll.errors import InvalidMetadataError
 from reroll.filename.py_version import PyVersion
 from reroll.filename.python_requirement import minor_range
 from reroll.lenient_parser import parse_lenient_requirement, parse_lenient_version_specifiers
@@ -24,7 +25,10 @@ def _normalize_dist_name(value: str) -> str:
     `canonicalize_name(validate=True)` only accepts the modern (PEP 508)
     name grammar.
     """
-    return canonicalize_name(value, validate=True)
+    try:
+        return canonicalize_name(value, validate=True)
+    except InvalidName as exc:
+        raise InvalidMetadataError(f"invalid Name {value!r}: {exc}") from exc
 
 
 _NormalizedDistName = Annotated[str, AfterValidator(_normalize_dist_name)]
@@ -103,20 +107,6 @@ class WheelMetadata(BaseModel):
         return tuple(str(parse_lenient_requirement(item)) for item in value)
 
 
-_AMBIGUOUS_FIELD = object()
-"""Sentinel for a METADATA header that's supposed to appear at most once,
-but that `parse_email` couldn't treat as a single, well-formed value --
-repeated with differing values, or mojibake-encoded from non-UTF-8 bytes.
-Both land in `parse_email`'s `unparsed` dict; a repeated header where every
-occurrence is byte-identical is resolved to that shared value instead (see
-`_single_value_field`), since it isn't actually ambiguous. This sentinel is
-also distinguishable from the header being entirely absent. Passing it
-straight through as a field's raw value (instead of defaulting to `None`)
-makes pydantic's own type validation reject it, so an ambiguous header can
-never be silently treated the same as an absent one.
-"""
-
-
 def parse_metadata(metadata: str) -> WheelMetadata:
     """Parse a wheel's `.dist-info/METADATA` contents into a `WheelMetadata`.
     Only fields that reroll cares about are recorded.
@@ -147,16 +137,17 @@ def parse_metadata(metadata: str) -> WheelMetadata:
 
 def _single_value_field(
     raw: RawMetadata, unparsed: dict[str, list[str]], raw_name: str, email_name: str
-) -> object:
+) -> str | None:
     """The METADATA value for a header that's supposed to appear at most
     once. Returns the value itself if `parse_email` parsed it; `None` if
     the header is entirely absent; the shared value if the header repeats
     with every occurrence byte-identical (not actually ambiguous -- real
-    wheels do this, e.g. the OZI build backend emitting `Name` twice); or
-    `_AMBIGUOUS_FIELD` otherwise -- repeated with differing values, or
-    undecodable. `parse_email` routes a single undecodable occurrence to
-    `unparsed` as a length-1 list, so that case always falls through to
-    `_AMBIGUOUS_FIELD` here too: there's nothing to compare it against.
+    wheels do this, e.g. the OZI build backend emitting `Name` twice).
+
+    Raises `InvalidMetadataError` otherwise -- repeated with differing
+    values, or undecodable. `parse_email` routes a single undecodable
+    occurrence to `unparsed` as a length-1 list, so that case always
+    raises here too: there's nothing to compare it against.
     """
     value = raw.get(raw_name)
     if value is not None:
@@ -164,4 +155,9 @@ def _single_value_field(
     duplicates = unparsed.get(email_name)
     if duplicates is not None and len(duplicates) > 1 and len(set(duplicates)) == 1:
         return duplicates[0]
-    return _AMBIGUOUS_FIELD if email_name in unparsed else None
+    if email_name in unparsed:
+        raise InvalidMetadataError(
+            f"{email_name!r} header is repeated with disagreeing values, or undecodable: "
+            f"{unparsed[email_name]!r}"
+        )
+    return None

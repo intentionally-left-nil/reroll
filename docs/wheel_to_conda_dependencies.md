@@ -3,7 +3,7 @@
 * The conda ecosystem doesn't prevent ABI breakages of e.g. pypy before `python_abi` was introduced, so the wheel work will not try to prevent ABI breakages when `python_abi` is unsupported
 * Expand out abi3 and abi3t into multiple repodata entries, rather than relying on `python-gil`
 * Reroll must silently strip out (but not error) any `Requires-Dist: Python ...` dependency (direct dependency on python, not a marker) for python and all related interpreters (python, cpython, pypy, graalpy)
-* `Requires-Dist` dependencies which contain local tags, direct URL's, or pre-release tags are invalid. Any invalid tags should cause the code to not emit a wheel record, and the error should be logged.
+* `Requires-Dist` dependencies which contain local tags, direct URL's, or pre-release tags are invalid. Any invalid tags raise `UnconvertableRequirementError`.
 * Provides-Extra is completely ignored. Extras for a package are determined by accumulating and normalizing the extra names from `Requires-Dist` only
 * All dependency calculations must follow the [Calculating Extras](#calculating-extras) algorithm, including base dependencies (which would have extras="")
 * Dependencies generated for an extra may include dependencies that also apply to the base depends. These duplicates will be removed as a post-processing step once all dependencies have been calculated
@@ -18,7 +18,7 @@ For the python dependency, this means that the wheel filename (including the pyt
 
 Our algorithm for converting wheel information into conda `depends` is:
 1. Determine if the python/abi combo requires an exact minor version of python, or a floor of python, following the [wheel_filename.md](./wheel_filename.md#python-tag) table
-2. If the wheel metada contains `Requires-Python`, intersect this range with the filename range. If the intersection is solvable, tighten the range to the intersection of both values. If the intersection is not solvable, the repodata will not be generated, return and emit a log warning
+2. If the wheel metada contains `Requires-Python`, intersect this range with the filename range. If the intersection is solvable, tighten the range to the intersection of both values. If the intersection is not solvable, raise `PythonRangeMismatchError`
 3. Generate a conda `depends` for python following the below rules for various cases
 
 # Calculating extras
@@ -174,7 +174,7 @@ On the pypi side, technically a Requires-Dist requirement of `python` is not spe
 
 
 # Simple dependency conversion
-The main format of a simple dependency is name-operator-version. Dependency names are converted from pypi names to conda names using the same conversion mechanism as the main filename. Failures to convert stops repodata generation with a log output.
+The main format of a simple dependency is name-operator-version. Dependency names are converted from pypi names to conda names using the same conversion mechanism as the main filename. Failures to convert raise `UnresolvedCondaNameError`.
 
 See [matchspec.md](./matchspec.md) for how the operator and version parts of a dependency convert to MatchSpec syntax.
 

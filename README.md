@@ -3,7 +3,8 @@ Reroll is an exploratory codebase which generates conda repodata.json-like entri
 
 ```py
 from reroll import reroll
-reroll('path-to-wheel.whl')
+
+reroll("path-to-wheel.whl")
 ```
 
 Reroll's principles are:
@@ -26,17 +27,19 @@ In such a scenario, the first step is data ingestion. Reroll does not care, nor 
 However, once you _do_ have the filename and the METADATA file, simply call:
 ```py
 from reroll.stages import extract_metadata_file, parse_metadata
+
 wheel_metadata_contents: str = "..."
 metadata = parse_metadata(wheel_metadata_contents)
-data_json = metadata.model_dump_json() # Save this to a database, along with the filename
+data_json = metadata.model_dump_json()  # Save this to a database, along with the filename
 ```
 
 And later, when you're ready to generate repodata:
 ```py
 from reroll import WheelMetadata
 from reroll.stages import get_wheel_records
-data_json = "..." # Load from your database
-wheel_filename = "..." # Load from your database
+
+data_json = "..."  # Load from your database
+wheel_filename = "..."  # Load from your database
 metadata = WheelMetadata.model_validate_json(data_json)
 records = get_wheel_records(metadata, filename)
 ```

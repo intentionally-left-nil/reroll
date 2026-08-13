@@ -8,7 +8,6 @@ step of that pipeline (`extract_metadata_file`, `parse_metadata`,
 
 from __future__ import annotations
 
-from email.policy import default
 from pathlib import Path
 
 from reroll.default_mappers import default_mappers
@@ -90,6 +89,7 @@ def reroll(
         size=size,
         url=url,
     )
+
 
 def to_matchspec(entry: str, *, mappers: NameMappers | None = None, allow_pre: bool = False) -> str:
     mappers = mappers or default_mappers()

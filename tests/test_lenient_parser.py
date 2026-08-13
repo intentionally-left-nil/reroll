@@ -9,6 +9,8 @@ sharp edges (see `reroll.lenient_parser`'s module docstring).
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
@@ -89,6 +91,26 @@ class TestParseLenientRequirement:
 
         actual = parse_lenient_requirement("""'numpy' >=1.19"; python_version >= "3.7\"""")
         assert actual == Requirement('numpy >=1.19; python_version >= "3.7"')
+
+    def test_missing_comma_mid_token_is_not_repaired(self) -> None:
+        """<https://pypi.org/project/ADLSstream/0.1.1/> -- pip<=24.1 would
+        install `tensorflow-addons (>=0.11.0keras-tcn)` by treating the
+        whole nonsense string as the version (docs/wheel_metadata.md,
+        "Other requires-dist quirks"). None of uv's `LenientRequirement`
+        fixups target a missing comma *inside* a version token -- only
+        between a digit and a comparison operator -- so this is rejected
+        rather than repaired, matching uv.
+        """
+        with pytest.raises(InvalidRequirementError):
+            parse_lenient_requirement("tensorflow-addons (>=0.11.0keras-tcn)")
+
+    def test_successful_fixup_logs_a_debug_message(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.DEBUG, logger="reroll.lenient_parser"):
+            parse_lenient_requirement("elasticsearch-dsl (>=7.2.0<8.0.0)")
+
+        (record,) = caplog.records
+        assert record.levelno == logging.DEBUG
+        assert "inserting missing comma" in record.message
 
 
 # --------------------------------------------------------------------------
@@ -196,6 +218,14 @@ class TestParseLenientVersionSpecifiers:
 
         actual = parse_lenient_version_specifiers(">=9a1.0")
         assert actual == SpecifierSet(">=9a1")
+
+    def test_successful_fixup_logs_a_debug_message(self, caplog: pytest.LogCaptureFixture) -> None:
+        with caplog.at_level(logging.DEBUG, logger="reroll.lenient_parser"):
+            parse_lenient_version_specifiers(">=7.2.0<8.0.0")
+
+        (record,) = caplog.records
+        assert record.levelno == logging.DEBUG
+        assert "inserting missing comma" in record.message
 
 
 # --------------------------------------------------------------------------

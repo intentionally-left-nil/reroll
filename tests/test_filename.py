@@ -688,6 +688,15 @@ class TestNameAndVersionCoercion:
         config = _config(normalized_pypi_name="Re_Roll.X")
         assert config.normalized_pypi_name == "re-roll-x"
 
+    def test_consecutive_mixed_separators_collapse_to_one_hyphen(self) -> None:
+        """docs/wheel_filename.md's normalization algorithm is
+        `re.sub(r"[-_.]+", "-", name).lower()` -- a *run* of `-`/`_`/`.` in
+        any combination collapses to a single hyphen, not one hyphen per
+        separator character.
+        """
+        config = _config(normalized_pypi_name="Foo--Bar__Baz..Qux._-Quux")
+        assert config.normalized_pypi_name == "foo-bar-baz-qux-quux"
+
     def test_version_is_normalized(self) -> None:
         config = _config(version="1.2.3.alpha1")
         assert config.version == Version("1.2.3a1")
@@ -996,6 +1005,20 @@ class TestParseFilename:
 
         assert {c.interpreter for c in configs} == {"py3", "cp313"}
 
+    def test_compressed_explosion_can_produce_only_nonsensical_combos(self) -> None:
+        """docs/wheel_filename.md's "Compressed tags" example:
+        `py312.py313-cp312.cp313-any` explodes to the cross product
+        `py312-cp312`, `py312-cp313`, `py313-cp312`, `py313-cp313` -- and
+        "no CPython version ever advertises the ABI except its exact
+        version" (a generic `py*` tag paired with anything but `none`),
+        so every one of those four combinations is individually invalid.
+        With nothing left to keep, the whole filename is rejected.
+        """
+        with pytest.raises(InvalidAbiTagError):
+            parse_filename(
+                "tinylib-1.2.3-py312.py313-cp312.cp313-any.whl", mappers=(aggregator_mapper,)
+            )
+
 
 # --------------------------------------------------------------------------
 # `parse_filename` <-> ABI explosion
@@ -1028,28 +1051,34 @@ class TestParseFilenameAbi3Explosion:
             ("cp316", "cp316t"),
         }
 
-    def test_low_floor_abi3_only_yields_configs_from_3_4_upward(self) -> None:
+    @pytest.mark.parametrize("start_minor", [2, 3])
+    def test_low_floor_abi3_only_yields_configs_from_3_4_upward(self, start_minor: int) -> None:
         """End-to-end version of `TestExplodeAbi3`'s low-floor case: the
         sub-3.4 exploded tags are real `WheelConfig` rejections, not just
-        absent from `explode_abi3`'s own output.
+        absent from `explode_abi3`'s own output. Both `cp32`/`abi3` and
+        `cp33`/`abi3` are the two "yes" `abi3` rows in the doc's Allowed
+        table -- both legal at the `abi3` shape level, both still missing
+        their sub-3.4 minors from the final output.
         """
         configs = parse_filename(
-            "tinylib-1.2.3-cp32-abi3-manylinux_2_17_x86_64.whl",
+            f"tinylib-1.2.3-cp3{start_minor}-abi3-manylinux_2_17_x86_64.whl",
             mappers=(aggregator_mapper,),
             abi3_upper_bound="3.5",
         )
 
         assert {c.interpreter for c in configs} == {"cp34", "cp35"}
 
-    def test_below_abi3s_own_floor_is_dropped_entirely_not_salvaged(self) -> None:
+    @pytest.mark.parametrize("minor", [0, 1])
+    def test_below_abi3s_own_floor_is_dropped_entirely_not_salvaged(self, minor: int) -> None:
         """docs/wheel_filename.md: a tag below `abi3`'s own 3.2 floor is
         dropped "as a strong suggestion the filename is bogus" -- it must
         not be exploded and then partially rescued by the unrelated `< 3.4`
-        rule the way `cp32-abi3` is.
+        rule the way `cp32-abi3` is. Both `cp30`/`abi3` and `cp31`/`abi3`
+        are "no" rows in the doc's Allowed table.
         """
         with pytest.raises(InvalidAbiTagError):
             parse_filename(
-                "tinylib-1.2.3-cp31-abi3-manylinux_2_17_x86_64.whl",
+                f"tinylib-1.2.3-cp3{minor}-abi3-manylinux_2_17_x86_64.whl",
                 mappers=(aggregator_mapper,),
                 abi3_upper_bound="3.6",
             )

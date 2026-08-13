@@ -137,12 +137,18 @@ def _entry_dependency(
 
 def _bare_entry(requirement: Requirement) -> str:
     """`requirement` as a PEP 508 string, its own marker excluded --
-    `"name[extras]specifier"`.
+    `"name[extras]specifier"`, or `"name[extras]@ url"` for a direct URL
+    reference. The URL must survive this reconstruction even though
+    reroll can never convert it -- dropping it here would silently turn a
+    direct-URL requirement into a bare, unconstrained one instead of
+    surfacing `pep508_to_matchspec`'s `UnconvertableRequirementError`.
     """
     parts = [requirement.name]
     if requirement.extras:
         parts.append(f"[{','.join(sorted(requirement.extras))}]")
-    if requirement.specifier:
+    if requirement.url:
+        parts.append(f"@ {requirement.url}")
+    elif requirement.specifier:
         parts.append(str(requirement.specifier))
     return "".join(parts)
 

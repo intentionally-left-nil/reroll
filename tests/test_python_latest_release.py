@@ -15,13 +15,25 @@ import pytest
 from reroll.errors import CacheWriteError, NetworkFetchError, UpstreamDataError
 from reroll.filename.python_latest_release import (
     CACHE_FILENAME_PREFIX,
+    DEFAULT_CACHE_DIR,
     DEFAULT_PYTHON_RELEASES_URL,
     _cached_files,
     _download,
+    _ensure_fresh_cache,
     _is_stale,
     _latest_minor_from_releases,
     latest_python_minor,
 )
+
+# --------------------------------------------------------------------------
+# `DEFAULT_CACHE_DIR` (docs/wheel_filename.md: "We are already using
+# `$HOME/.cache/reroll` for parselmouth data, so we can add the file here")
+# --------------------------------------------------------------------------
+
+
+def test_default_cache_dir_is_home_cache_reroll() -> None:
+    assert Path.home() / ".cache" / "reroll" == DEFAULT_CACHE_DIR
+
 
 # --------------------------------------------------------------------------
 # `_latest_minor_from_releases`
@@ -193,6 +205,40 @@ class TestLatestPythonMinor:
         assert oldest not in remaining
         assert stale not in remaining
         assert len(remaining) == 1
+
+    def test_second_scan_protects_a_concurrently_written_newer_file_from_deletion(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """docs/wheel_filename.md: cleanup does "a second directory scan ...
+        in case of race conditions" -- taken *after* the download, not off
+        the pre-download listing. Simulate another process finishing its
+        own refresh while ours is still in flight: our download's own
+        `_download` call, as a side effect, drops in a file newer than the
+        one we are about to write. The post-download scan must delete the
+        *original* stale file but leave that concurrently-written newer
+        file alone, even though it was invisible to the pre-download scan.
+        """
+        stale = _touch_cache_file(tmp_path, datetime.now(UTC) - timedelta(days=2))
+        stale.write_text(json.dumps(_releases_payload(["3.12"])))
+
+        real_download = _download
+        concurrent_file = tmp_path / f"{CACHE_FILENAME_PREFIX}9999999999.json"
+
+        def _download_and_simulate_a_racing_process(url: str, directory: Path) -> Path:
+            concurrent_file.write_text(json.dumps(_releases_payload(["3.15"])))
+            return real_download(url, directory)
+
+        monkeypatch.setattr(
+            "reroll.filename.python_latest_release._download",
+            _download_and_simulate_a_racing_process,
+        )
+        _install_fake_urlopen(monkeypatch, [_payload_bytes(["3.14"])])
+
+        _ensure_fresh_cache(tmp_path, DEFAULT_PYTHON_RELEASES_URL)
+
+        remaining = _cached_files(tmp_path)
+        assert stale not in remaining
+        assert concurrent_file in remaining
 
     def test_creates_the_cache_directory_if_missing(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

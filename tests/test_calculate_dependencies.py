@@ -147,6 +147,34 @@ class TestUnconditionalEntries:
         with pytest.raises(UnconvertableRequirementError, match="local version label"):
             _dependencies(config, metadata, (aggregator_mapper,))
 
+    def test_rejects_the_whole_record_for_a_direct_url_entry(self) -> None:
+        """docs/wheel_to_conda_dependencies.md's "Simple dependency
+        conversion" section: a direct URL reference has no matchspec
+        equivalent, same as a local version label above. Expected to raise
+        `UnconvertableRequirementError`, same as `pep508_to_matchspec`
+        does when called directly with a URL entry
+        (`test_pep508_to_matchspec.py`).
+
+        Currently fails: `_bare_entry` rebuilds the entry from
+        `requirement.name`/`.extras`/`.specifier` only, silently dropping
+        `.url` before the reconstructed string ever reaches
+        `pep508_to_matchspec`'s own URL check -- so a direct-URL entry is
+        converted as if it were a bare name dependency instead of being
+        rejected.
+        """
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(requires_dist=("requests @ https://example.com/requests.whl",))
+
+        with pytest.raises(UnconvertableRequirementError, match="direct URL"):
+            _dependencies(config, metadata, (aggregator_mapper,))
+
+    def test_rejects_the_whole_record_for_a_prerelease_entry_without_allow_pre(self) -> None:
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(requires_dist=("requests==1.0.0rc1",))
+
+        with pytest.raises(UnconvertableRequirementError, match="pre-release"):
+            _dependencies(config, metadata, (aggregator_mapper,))
+
 
 # --------------------------------------------------------------------------
 # A leftover environment marker (not `extra`) converts to a `when=` clause.
@@ -330,6 +358,28 @@ class TestUnconditionalDependencyIsDedupedFromExtras:
         assert result.depends == ("requests >=1.2", "python >=3.0")
         assert result.extra_depends == {"major-bump": ("requests >=2.0",)}
 
+    def test_dedup_is_naive_string_matching_not_semantic_equivalence(self) -> None:
+        """docs/wheel_to_conda_dependencies.md's "Splitting base
+        dependencies from extras" section: `>=1.0` and `>=1.0.0` are the
+        same constraint (`packaging.version.Version` treats them equal),
+        but `format_version` spells them differently (`"1.0"` vs
+        `"1.0.0"`), so the post-processing dedup -- exact string matching
+        only -- does not recognize them as the same MatchSpec. Both
+        survive; this is accepted per the doc, not a bug.
+        """
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(
+            requires_dist=(
+                "requests>=1.0",
+                'requests>=1.0.0; extra == "standard"',
+            )
+        )
+
+        result = _dependencies(config, metadata, (aggregator_mapper,))
+
+        assert result.depends == ("requests >=1.0", "python >=3.0")
+        assert result.extra_depends == {"standard": ("requests >=1.0.0",)}
+
     def test_dedup_does_not_apply_across_two_different_extras(self) -> None:
         """A dependency shared by two extras (but not the base), e.g.
         FastAPI's `httpx` under both `standard` and `all`, is kept in
@@ -415,6 +465,81 @@ class TestWholeRecordRejection:
             "foo": ("requests >=2.0.0",),
             "bar": ("requests >=2.0.0",),
         }
+
+
+# --------------------------------------------------------------------------
+# "Repeated dependency names" (docs/wheel_to_conda_dependencies.md): reroll
+# never merges/intersects same-named entries itself -- both survive as
+# separate MatchSpecs, left for the solver to intersect.
+# --------------------------------------------------------------------------
+
+
+class TestRepeatedDependencyNames:
+    def test_same_pypi_name_repeated_with_different_specifiers_is_not_merged(self) -> None:
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(requires_dist=("requests>=1.2", "requests<3.0"))
+
+        result = _dependencies(config, metadata, (aggregator_mapper,))
+
+        assert result.depends == ("requests >=1.2", "requests <3.0", "python >=3.0")
+
+    def test_two_different_pypi_names_mapping_to_the_same_conda_name_are_not_merged(
+        self,
+    ) -> None:
+        """When two distinct PyPI names both map to one conda package (a
+        many-to-one mapper), reroll still emits one MatchSpec per source
+        entry rather than merging them -- exactly like the same-name case
+        above, just with the collision happening after name mapping
+        instead of before it.
+        """
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(requires_dist=("foo>=1.0", "bar>=2.0"))
+        mappers = (static_mapper({"foo": "shared-conda-name", "bar": "shared-conda-name"}),)
+
+        result = _dependencies(config, metadata, mappers)
+
+        assert result.depends == (
+            "shared-conda-name >=1.0",
+            "shared-conda-name >=2.0",
+            "python >=3.0",
+        )
+
+
+# --------------------------------------------------------------------------
+# `Provides-Extra` (docs/wheel_to_conda_dependencies.md's "Dealing with
+# extras"): completely ignored -- extras come solely from `Requires-Dist`
+# markers, regardless of what `Provides-Extra` says.
+# --------------------------------------------------------------------------
+
+
+class TestProvidesExtraIgnored:
+    def test_provides_extra_with_no_matching_requires_dist_marker_yields_no_extra(
+        self,
+    ) -> None:
+        config = _config(interpreter="py3", abi="none")
+        metadata = WheelMetadata(
+            name="tinylib",
+            version="1.2.3",
+            requires_dist=("requests>=2.0.0",),
+            provides_extra=("standard",),
+        )
+
+        result = _dependencies(config, metadata, (aggregator_mapper,))
+
+        assert result.extra_depends == {}
+
+    def test_requires_dist_extra_marker_is_found_even_without_provides_extra(self) -> None:
+        config = _config(interpreter="py3", abi="none")
+        metadata = WheelMetadata(
+            name="tinylib",
+            version="1.2.3",
+            requires_dist=('httpx>=0.23.0; extra == "standard"',),
+            provides_extra=(),
+        )
+
+        result = _dependencies(config, metadata, (aggregator_mapper,))
+
+        assert result.extra_depends == {"standard": ("httpx >=0.23.0",)}
 
 
 # --------------------------------------------------------------------------

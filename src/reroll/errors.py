@@ -11,9 +11,13 @@ than next to its raise site, so the whole hierarchy is visible in one place.
 Each category logs itself, at construction, to its own logger
 (`reroll.scope`/`reroll.invalid`/`reroll.unconvertable`/`reroll.runtime`, all
 children of the `reroll` logger) at the level `docs/errors_and_logging.md`
-assigns that category. Raising a `RerollError` is therefore the only logging
-call a call site needs to make; callers who want more or less log volume for
-one category tune its logger directly, e.g.
+assigns that category. `RerollScopeError`, `RerollInvalidWheelError`, and
+`RerollUnconvertableError` each mean a wheel was skipped, so they also log an
+Info-level skip message alongside their category-level record; a
+`RerollRuntimeError` says nothing about a wheel and logs only once, at Error.
+Raising a `RerollError` is therefore the only logging call a call site needs
+to make; callers who want more or less log volume for one category tune its
+logger directly, e.g.
 `logging.getLogger("reroll.unconvertable").setLevel(logging.ERROR)`.
 """
 
@@ -97,6 +101,7 @@ class RerollInvalidWheelError(RerollError):
     def __init__(self, *args: object) -> None:
         super().__init__(*args)
         self._logger.warning(str(self))
+        self._logger.info("skipping wheel: %s", self)
 
 
 class InvalidAbiTagError(RerollInvalidWheelError):
@@ -124,6 +129,13 @@ class InvalidMetadataError(RerollInvalidWheelError):
     """A METADATA header meant to appear at most once was undecodable, or
     repeated with disagreeing values; or `Name` does not conform to the
     modern (PEP 508) name grammar.
+    """
+
+
+class MetadataFilenameMismatchError(RerollInvalidWheelError):
+    """METADATA's `Name` or `Version` header does not agree with the wheel
+    filename's own name or version segment, once both are normalized (PEP
+    503 for the name, PEP 440 equality for the version).
     """
 
 
@@ -156,6 +168,7 @@ class RerollUnconvertableError(RerollError):
     def __init__(self, *args: object) -> None:
         super().__init__(*args)
         self._logger.warning(str(self))
+        self._logger.info("skipping wheel: %s", self)
 
 
 class InvalidCondaNameError(RerollUnconvertableError):

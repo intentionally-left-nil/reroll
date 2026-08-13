@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
@@ -298,6 +300,23 @@ class TestLicenseExpression:
 
         assert metadata.license_expression is None
 
+    def test_dropping_an_invalid_expression_logs_a_debug_message(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.DEBUG, logger="reroll.wheel_metadata"):
+            parse_metadata(
+                _text(
+                    "Metadata-Version: 2.4",
+                    "Name: tinylib",
+                    "Version: 1.0",
+                    "License-Expression: not a valid @@ expression",
+                )
+            )
+
+        (record,) = caplog.records
+        assert record.levelno == logging.DEBUG
+        assert "not a valid @@ expression" in record.message
+
 
 # --------------------------------------------------------------------------
 # `license` (free text)
@@ -448,6 +467,22 @@ class TestRequiresPython:
                     "Name: tinylib",
                     "Version: 1.0",
                     "Requires-Python: >=1.0 and !!invalid!!",
+                )
+            )
+
+    def test_non_ascii_entry_is_rejected(self) -> None:
+        """PEP 440's version specifier grammar is ASCII-only, like PEP
+        508's requirement grammar (see `TestRequiresDist`'s equivalent
+        test) -- `SpecifierSet()` rejects non-ASCII on its own, with no
+        lenient fixup for it.
+        """
+        with pytest.raises(InvalidVersionSpecifierError):
+            parse_metadata(
+                _text(
+                    "Metadata-Version: 2.1",
+                    "Name: tinylib",
+                    "Version: 1.0",
+                    "Requires-Python: >=café",
                 )
             )
 
@@ -614,6 +649,26 @@ class TestRequiresDist:
                 )
             )
 
+    def test_pip_relaxed_parsing_missing_comma_quirk_is_rejected(self) -> None:
+        """<https://pypi.org/project/ADLSstream/0.1.1/>: a missing comma
+        between `INSTALL_REQUIRES` entries produced the METADATA value
+        `tensorflow-addons (>=0.11.0keras-tcn)`. pip<=24.1 installed this
+        by parsing `0.11.0keras-tcn` as a (nonsense) version; uv rejects
+        it, and none of uv's `LenientRequirement` fixups repair a missing
+        comma *inside* a version token (only between a digit and a
+        comparison operator) -- see docs/wheel_metadata.md's "Other
+        requires-dist quirks".
+        """
+        with pytest.raises(InvalidRequirementError):
+            parse_metadata(
+                _text(
+                    "Metadata-Version: 1.2",
+                    "Name: tinylib",
+                    "Version: 1.0",
+                    "Requires-Dist: tensorflow-addons (>=0.11.0keras-tcn)",
+                )
+            )
+
 
 # --------------------------------------------------------------------------
 # `provides_extra`
@@ -695,6 +750,27 @@ class TestIgnoredFields:
 
         assert metadata.name == "tinylib"
 
+    def test_unrecognized_metadata_version_has_no_effect(self) -> None:
+        """Per `docs/wheel_metadata.md`'s "Metadata-Version" section,
+        reroll never validates other fields against `Metadata-Version` --
+        an unrecognized (here, futuristic) value doesn't block parsing of
+        an otherwise-ordinary METADATA file.
+        """
+        metadata = parse_metadata(_text("Metadata-Version: 99.9", "Name: tinylib", "Version: 1.0"))
+
+        assert metadata.name == "tinylib"
+        assert metadata.version == Version("1.0")
+
+    def test_missing_metadata_version_has_no_effect(self) -> None:
+        """`Metadata-Version` is never required by reroll, unlike the spec
+        (`docs/wheel_metadata.md`) -- a METADATA file omitting it entirely
+        still parses.
+        """
+        metadata = parse_metadata(_text("Name: tinylib", "Version: 1.0"))
+
+        assert metadata.name == "tinylib"
+        assert metadata.version == Version("1.0")
+
 
 # --------------------------------------------------------------------------
 # Encoding / line-ending handling
@@ -710,6 +786,16 @@ class TestEncodingChallenges:
 
     def test_mixed_line_endings(self) -> None:
         metadata = parse_metadata("Metadata-Version: 2.1\r\nName: tinylib\nVersion: 1.0\r\n\n")
+
+        assert metadata.name == "tinylib"
+        assert metadata.version == Version("1.0")
+
+    def test_mac_classic_line_endings(self) -> None:
+        """Classic Mac OS (pre-OS X) used a bare `\\r` as its line ending --
+        `docs/wheel_metadata.md` calls this out by name alongside Windows'
+        and Unix's, distinct from the CRLF (`\\r\\n`) case above.
+        """
+        metadata = parse_metadata("Metadata-Version: 2.1\rName: tinylib\rVersion: 1.0\r\r")
 
         assert metadata.name == "tinylib"
         assert metadata.version == Version("1.0")

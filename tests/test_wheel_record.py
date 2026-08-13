@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from reroll.dependencies import WheelDependencies
-from reroll.errors import UnconvertableRequirementError, UnsupportedPrereleaseError
+from reroll.errors import (
+    MetadataFilenameMismatchError,
+    UnconvertableRequirementError,
+    UnsupportedPrereleaseError,
+)
 from reroll.name_mapping import NameMappers, aggregator_mapper, static_mapper
 from reroll.subdir import CondaSubdir
 from reroll.wheel_metadata import WheelMetadata
@@ -154,19 +160,25 @@ class TestNoarchRecord:
 
     def test_version_comes_from_metadata_not_filename(self) -> None:
         """Per docs/wheel_record.md, `version` is sourced from the
-        METADATA `Version` header, not the filename's own version --
-        deliberately using different values here to pin that down.
+        METADATA `Version` header, not the filename's own version string
+        verbatim -- using a value that's PEP 440-equal to the filename's
+        version but spelled differently (an explicit trailing-zero release
+        segment) pins this down without tripping the filename/METADATA
+        agreement check (docs/wheel_metadata.md), which the two *are*
+        allowed to disagree with in spelling as long as they're equal.
         """
-        metadata = _metadata(version="9.9.9")
+        metadata = _metadata(version="1.2.3.0")
 
         (record,) = get_wheel_records(metadata, "tinylib-1.2.3-py3-none-any.whl", mappers=_MAPPERS)
 
-        assert record.version == "9.9.9"
+        assert record.version == "1.2.3.0"
 
     def test_version_is_cep33_formatted(self) -> None:
         metadata = _metadata(version="1.2.3rc1")
 
-        (record,) = get_wheel_records(metadata, "tinylib-1.2.3-py3-none-any.whl", mappers=_MAPPERS)
+        (record,) = get_wheel_records(
+            metadata, "tinylib-1.2.3rc1-py3-none-any.whl", mappers=_MAPPERS, allow_pre=True
+        )
 
         assert record.version == "1.2.3.rc1"
 
@@ -177,6 +189,70 @@ class TestNoarchRecord:
         (record,) = get_wheel_records(metadata, "tinylib-1.2.3-py3-none-any.whl", mappers=mappers)
 
         assert record.name == "tiny-lib"
+
+
+# --------------------------------------------------------------------------
+# `get_wheel_records`: METADATA must agree with the filename
+# --------------------------------------------------------------------------
+
+
+class TestMetadataFilenameAgreement:
+    """docs/wheel_metadata.md: "The Name and version must match the
+    filename". `get_wheel_records` must reject a wheel where the METADATA
+    `Name`/`Version` disagree with the filename's, rather than silently
+    trusting METADATA (which is what every other field does).
+    """
+
+    def test_name_mismatch_raises(self) -> None:
+        metadata = _metadata(name="otherlib")
+
+        with pytest.raises(MetadataFilenameMismatchError):
+            get_wheel_records(metadata, "tinylib-1.2.3-py3-none-any.whl", mappers=_MAPPERS)
+
+    def test_version_mismatch_raises(self) -> None:
+        metadata = _metadata(version="9.9.9")
+
+        with pytest.raises(MetadataFilenameMismatchError):
+            get_wheel_records(metadata, "tinylib-1.2.3-py3-none-any.whl", mappers=_MAPPERS)
+
+    def test_name_mismatch_is_checked_after_pep_503_normalization(self) -> None:
+        """The filename's name segment and METADATA's `Name` header are
+        each normalized independently (PEP 503) before comparison, so
+        differing-but-equivalent spellings (case, `-`/`_`/`.` runs) must
+        not raise.
+        """
+        metadata = _metadata(name="Tiny_Lib")
+
+        (record,) = get_wheel_records(metadata, "tiny_lib-1.2.3-py3-none-any.whl", mappers=_MAPPERS)
+
+        assert record.name == "tiny-lib"
+
+    def test_version_mismatch_is_checked_by_pep_440_equality_not_string_equality(self) -> None:
+        """A version spelled differently but PEP 440-equal to the
+        filename's (a redundant leading zero) must not raise -- see
+        `test_version_comes_from_metadata_not_filename` for the
+        trailing-zero-release-segment case.
+        """
+        metadata = _metadata(version="01.2.3")
+
+        (record,) = get_wheel_records(metadata, "tinylib-1.2.3-py3-none-any.whl", mappers=_MAPPERS)
+
+        assert record.version == "1.2.3"
+
+    def test_mismatch_is_checked_before_dependency_conversion(self) -> None:
+        """An unrelated `Requires-Dist` conversion failure must not mask a
+        name/version mismatch -- the filename/METADATA agreement check
+        runs first. The direct-URL entry is valid PEP 508 (so it survives
+        `WheelMetadata` construction), but `calculate_dependencies` would
+        reject it with `UnconvertableRequirementError` if this record's
+        dependencies were ever converted.
+        """
+        metadata = _metadata(
+            name="otherlib", requires_dist=("requests @ https://example.com/requests.whl",)
+        )
+
+        with pytest.raises(MetadataFilenameMismatchError):
+            get_wheel_records(metadata, "tinylib-1.2.3-py3-none-any.whl", mappers=_MAPPERS)
 
 
 # --------------------------------------------------------------------------
@@ -295,3 +371,45 @@ class TestArgumentThreading:
             "cp39_cp39_manylinux_2_17_x86_64_0",
             "cp310_cp310_manylinux_2_17_x86_64_0",
         }
+
+
+# --------------------------------------------------------------------------
+# `get_wheel_records`: `build`/`build_number` formatting
+# (docs/wheel_record.md's `build`/`build_number` sections)
+# --------------------------------------------------------------------------
+
+_BUILD_STRING_RE = re.compile(r"^([a-z0-9_.]+_)?[0-9]+$")
+
+
+class TestBuildString:
+    @pytest.mark.parametrize(
+        "filename",
+        [
+            "tinylib-1.2.3-py3-none-any.whl",
+            "tinylib-1.2.3-cp313-cp313-manylinux_2_17_x86_64.whl",
+            "tinylib-1.2.3-cp313-cp313-macosx_10_9_universal2.whl",
+        ],
+    )
+    def test_build_matches_the_repodata_schema_pattern(self, filename: str) -> None:
+        metadata = _metadata()
+
+        records = get_wheel_records(metadata, filename, mappers=_MAPPERS)
+
+        assert all(_BUILD_STRING_RE.match(record.build) for record in records)
+
+    def test_wheel_build_tag_does_not_leak_into_build_number_or_build_string(self) -> None:
+        """A wheel filename MAY carry its own PEP 427 build tag (e.g. the
+        `1mybuild` segment here). Per docs/wheel_record.md's `build_number`
+        section, reroll does not yet drive `build_number` from it -- it
+        stays `0`, and the tag does not appear in the `build` string
+        either.
+        """
+        metadata = _metadata()
+
+        (record,) = get_wheel_records(
+            metadata, "tinylib-1.2.3-1mybuild-py3-none-any.whl", mappers=_MAPPERS
+        )
+
+        assert record.build_number == 0
+        assert record.build == "py3_none_any_0"
+        assert "mybuild" not in record.build

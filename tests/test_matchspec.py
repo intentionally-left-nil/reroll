@@ -41,6 +41,15 @@ class TestValidateMatchspecRejects:
         with pytest.raises(UnconvertableRequirementError, match="not a valid matchspec"):
             validate_matchspec(value)
 
+    def test_rejects_a_bare_bracketed_extra_without_the_extras_key(self) -> None:
+        """docs/matchspec.md#requiring-a-dependency-with-an-extra: matchspec
+        does not accept `fastapi[all]` on its own -- the `[]` bracket
+        notation is reserved for `key=value` pairs (like `extras=[all]`),
+        so an extra name must always go through that key.
+        """
+        with pytest.raises(UnconvertableRequirementError, match="not a valid matchspec"):
+            validate_matchspec("fastapi[all]")
+
     def test_error_names_the_offending_value(self) -> None:
         with pytest.raises(UnconvertableRequirementError, match="bogus_key"):
             validate_matchspec("fastapi[bogus_key=1]")

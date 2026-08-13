@@ -158,6 +158,15 @@ class InvalidCondaNameError(RerollUnconvertableError):
     """
 
 
+class NeedsArchSplitError(RerollUnconvertableError):
+    """A noarch record's `Requires-Dist` marker still refers to a
+    platform-specific key (`platform_system`, `platform_machine`,
+    `sys_platform`, or `os_name`) after evaluating it against the known
+    Python pinning and extra. A single noarch record can't represent it;
+    the caller must emit one record per `CondaSubdir` instead.
+    """
+
+
 class PythonRangeMismatchError(RerollUnconvertableError):
     """A wheel's filename-implied Python range and its `Requires-Python`
     metadata do not intersect at all -- no valid record can be emitted for

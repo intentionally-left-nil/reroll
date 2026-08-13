@@ -80,6 +80,41 @@ class TestCandidate:
                 mapper="test",
             )
 
+    def test_source_rejects_a_value_outside_the_fixed_set(self) -> None:
+        """`source` is restricted to `parselmouth`/`grayskull`/`conda-lock`/
+        `other` -- any other string is rejected, not silently accepted as a
+        fifth, ad-hoc source.
+        """
+        with pytest.raises(ValidationError):
+            Candidate(
+                conda_name="tzdata",
+                probability=0.5,
+                source=cast(CandidateSource, "pip"),
+                mapper="test",
+            )
+
+    def test_mapper_distinguishes_two_candidates_sharing_one_source(self) -> None:
+        """`mapper` is independent of `source`: two candidates can share a
+        `source` while naming different contributing mappers, so a logic
+        mapper can tell them apart even though it can't tell them apart by
+        `source` alone.
+        """
+        first = Candidate(
+            conda_name="tzdata",
+            probability=0.6,
+            source=CandidateSource.PARSELMOUTH,
+            mapper="parselmouth_exact_version",
+        )
+        second = Candidate(
+            conda_name="tzdata",
+            probability=0.3,
+            source=CandidateSource.PARSELMOUTH,
+            mapper="parselmouth_fuzzy_match",
+        )
+
+        assert first.source == second.source
+        assert first.mapper != second.mapper
+
     def test_conda_name_is_not_validated_against_cep_26(self) -> None:
         """CEP 26 validation is deferred entirely to whatever consumes the
         final chosen name (e.g. `WheelConfig` in `reroll.filename`) -- an
@@ -517,6 +552,20 @@ class TestAggregatorMapper:
 
         assert result == "tinylib"
 
+    def test_fallback_does_not_enforce_the_64_character_limit(self) -> None:
+        """The normalized-name fallback is deferred entirely to whatever
+        consumes the final chosen name (e.g. `CondaPackageName` in
+        `reroll.filename.wheel_config`) -- `aggregator_mapper` itself
+        performs no length check, so an over-limit name passes straight
+        through rather than being rejected here.
+        """
+        long_name = canonicalize_name("a" * 65)
+
+        result = aggregator_mapper(long_name, ())
+
+        assert result == long_name
+        assert len(result) > 64
+
     # A grayskull candidate is authoritative.
 
     def test_grayskull_candidate_alone_is_taken(self) -> None:
@@ -680,6 +729,16 @@ class TestAggregatorMapper:
 
     def test_used_end_to_end_falls_back_to_normalized_name(self) -> None:
         assert map_name("Zope_Interface", (aggregator_mapper,)) == ("zope-interface")
+
+    def test_used_end_to_end_the_64_character_limit_is_not_enforced_by_map_name(self) -> None:
+        """`map_name` returns whatever string a mapper (here,
+        `aggregator_mapper`'s fallback) resolves to, uninspected -- CEP 26
+        length/shape validation is a downstream concern, not part of the
+        chain-resolution contract.
+        """
+        result = map_name("a" * 65, (aggregator_mapper,))
+
+        assert result == "a" * 65
 
     def test_used_end_to_end_after_a_no_opinion_mapper(self) -> None:
         no_opinion = _Spy(result=None)

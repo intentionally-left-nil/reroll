@@ -86,6 +86,16 @@ class TestArchSplit:
     def test_arch_specific_resolves_a_non_matching_platform_marker_instead(self) -> None:
         assert _result('sys_platform == "linux"', subdir=CondaSubdir.OSX_64) is None
 
+    def test_arch_key_and_unpermitted_key_together_prefers_arch_split(self) -> None:
+        """Step 6 runs before step 7: a noarch marker combining a
+        platform-specific key with an otherwise-unpermitted key raises
+        `NeedsArchSplitError`, not `UnconvertableMarkerError` -- the caller
+        should retry per-subdir first; only an arch-specific retry that
+        *still* can't resolve the unpermitted key would reach step 7.
+        """
+        with pytest.raises(NeedsArchSplitError):
+            _result('platform_machine == "x86_64" and platform_release == "10"', subdir=None)
+
 
 class TestUnpermittedKeys:
     """Step 7: any key besides `python_version`/`python_full_version`/
@@ -166,6 +176,43 @@ class TestFullVersionReduction:
         assert _result('"3.13.2" in python_full_version', python_version=(13, 14)) == (
             '"3.13.2" in python_full_version'
         )
+
+    def test_not_in_test_against_full_version_is_dropped_from_the_environment_too(self) -> None:
+        """`not in`, same as `in` above, is one of the disqualifying
+        operators (docs/matchspec.md's reduction algorithm groups `in`
+        and `not in` together), and is covered by the same `ContainsNode`
+        check regardless of its `negate` flag.
+        """
+        assert _result('"3.13.2" not in python_full_version', python_version=(13, 14)) == (
+            '"3.13.2" not in python_full_version'
+        )
+
+    def test_ordered_comparator_between_the_pinned_minors_probe_points_is_not_reduced(
+        self,
+    ) -> None:
+        """`python_full_version >= "3.13.50"` sits strictly between the
+        pinned minor's two probe points (3.13.0 and 3.13.100): 3.13.0
+        doesn't satisfy `>=3.13.50` but 3.13.100 does, so the two probes
+        disagree and the reduction algorithm must leave this unresolved
+        rather than reducing it to an always-true/always-false answer.
+        """
+        assert _result('python_full_version >= "3.13.50"', python_version=(13, 14)) == (
+            'python_full_version >= "3.13.50"'
+        )
+
+    def test_disqualifying_python_full_version_does_not_disqualify_implementation_version(
+        self,
+    ) -> None:
+        """`python_full_version` and `implementation_version` are reduced
+        independently -- a disqualifying `==`/`!=`/`in`/`not in` use of one
+        does not drop the other from the environment too.
+        """
+        result = _result(
+            'python_full_version == "2.7.5" or implementation_version < "3.9"',
+            python_version=(13, 14),
+        )
+
+        assert result == 'python_full_version == "2.7.5"'
 
     def test_disqualifying_use_disqualifies_every_occurrence_in_the_marker(self) -> None:
         """The reduction rule drops the key for the *whole* marker once

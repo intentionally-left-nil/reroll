@@ -5,6 +5,7 @@ from __future__ import annotations
 from reroll.default_mappers import default_mappers
 from reroll.dependencies import WheelDependencies, wheel_dependencies
 from reroll.dependencies.version_format import format_version
+from reroll.errors import MetadataFilenameMismatchError
 from reroll.filename import WheelConfig, parse_filename
 from reroll.license import convert_license
 from reroll.name_mapping import NameMappers
@@ -63,6 +64,10 @@ def get_wheel_records(
     `sha256`, `size`, and `url` are never computed here -- each is set on
     every returned record only if the caller passes it in (docs/wheel_record.md).
 
+    Raises `reroll.errors.MetadataFilenameMismatchError` if `metadata.name`
+    or `metadata.version` disagrees with `filename`'s own name or version
+    segment, once both are normalized -- docs/wheel_metadata.md.
+
     Raises whatever `reroll.filename.parse_filename` or
     `reroll.dependencies.wheel_dependencies` raise: `InvalidFilenameError`,
     `UnsupportedPrereleaseError`, `UnresolvedCondaNameError`, or any other
@@ -73,6 +78,7 @@ def get_wheel_records(
     configs = _dedupe_configs(
         parse_filename(filename, mappers, abi3_upper_bound=abi3_upper_bound, allow_pre=allow_pre)
     )
+    _validate_metadata_matches_filename(metadata, configs, filename)
     license_expression = convert_license(metadata)
     version = format_version(metadata.version)
     records: list[WheelRecord] = []
@@ -97,6 +103,25 @@ def get_wheel_records(
                 )
             )
     return tuple(records)
+
+
+def _validate_metadata_matches_filename(
+    metadata: WheelMetadata, configs: tuple[WheelConfig, ...], filename: str
+) -> None:
+    """Raises `MetadataFilenameMismatchError` if `metadata.name` or
+    `metadata.version` disagrees with `configs`' filename-derived name or
+    version -- docs/wheel_metadata.md's "The Name and version must match
+    the filename". `normalized_pypi_name`/`version` are invariant across
+    every `WheelConfig` one filename expands to (`WheelConfig`'s
+    docstring), so checking the first checks them all.
+    """
+    config = configs[0]
+    if metadata.name == config.normalized_pypi_name and metadata.version == config.version:
+        return
+    raise MetadataFilenameMismatchError(
+        f"METADATA Name/Version ({metadata.name!r} {metadata.version}) does not match "
+        f"filename {filename!r} ({config.normalized_pypi_name!r} {config.version})"
+    )
 
 
 def _dedupe_configs(configs: tuple[WheelConfig, ...]) -> tuple[WheelConfig, ...]:

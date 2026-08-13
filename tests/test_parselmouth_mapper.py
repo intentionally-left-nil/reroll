@@ -20,6 +20,7 @@ from reroll.errors import CacheWriteError, DatabaseError, NetworkFetchError
 from reroll.name_mapping import Candidate, CandidateSource
 from reroll.parselmouth_mapper import (
     BASE_PROBABILITY,
+    DEFAULT_CHANNEL,
     DEFAULT_RELATIONS_URL,
     CandidateEvidence,
     NameAxis,
@@ -477,6 +478,116 @@ def _mapping_row(
     ).fetchone()
 
 
+class TestPypiClaimSchemaConstraints:
+    """`pypi_claim`'s primary key is the full four-column tuple `(conda_name,
+    conda_version, pypi_name, pypi_version)`: exactly that combination, not
+    any subset of it, must be unique.
+    """
+
+    def test_duplicate_composite_key_is_rejected(self, connection: sqlite3.Connection) -> None:
+        write_relations(connection, [])  # creates the schema without writing any row
+        connection.execute(
+            "INSERT INTO pypi_claim "
+            "(conda_name, conda_version, pypi_name, pypi_version, version_state) "
+            "VALUES ('foo', '1.0.0', 'foo', '1.0.0', 'agrees')"
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO pypi_claim "
+                "(conda_name, conda_version, pypi_name, pypi_version, version_state) "
+                "VALUES ('foo', '1.0.0', 'foo', '1.0.0', 'agrees')"
+            )
+
+    def test_a_row_differing_in_only_one_key_column_is_accepted(
+        self, connection: sqlite3.Connection
+    ) -> None:
+        write_relations(connection, [])
+        connection.execute(
+            "INSERT INTO pypi_claim "
+            "(conda_name, conda_version, pypi_name, pypi_version, version_state) "
+            "VALUES ('foo', '1.0.0', 'foo', '1.0.0', 'agrees')"
+        )
+        # Same conda_name/conda_version/pypi_name, but a different pypi_version:
+        # not a duplicate of the composite key, so must not raise.
+        connection.execute(
+            "INSERT INTO pypi_claim "
+            "(conda_name, conda_version, pypi_name, pypi_version, version_state) "
+            "VALUES ('foo', '1.0.0', 'foo', '2.0.0', 'disagrees')"
+        )
+        assert connection.execute("SELECT COUNT(*) FROM pypi_claim").fetchone()[0] == 2
+
+    def test_write_relations_silently_collapses_an_exact_duplicate_row(
+        self, connection: sqlite3.Connection
+    ) -> None:
+        # The same raw relation reported twice (e.g. two identical lines in
+        # upstream's data) must not raise and must not double-count.
+        row = _row("foo", "foo-1.0.0-py38.conda", "foo", "1.0.0")
+        write_relations(connection, [row, row])
+        assert connection.execute("SELECT COUNT(*) FROM pypi_claim").fetchone()[0] == 1
+
+
+class TestPypiClaimLeftPrefixLookup:
+    """The composite primary key `(conda_name, conda_version, pypi_name,
+    pypi_version)` is ordered so that a query constrained by only its
+    leading columns can still use the key's own B-tree index, without
+    needing every column.
+    """
+
+    def test_lookup_by_a_leading_prefix_of_the_key_returns_only_matching_rows(
+        self, connection: sqlite3.Connection
+    ) -> None:
+        write_relations(
+            connection,
+            [
+                _row("foo", "foo-1.0.0-py38.conda", "foo", "1.0.0"),
+                _row("foo", "foo-1.0.0-py38.conda", "foo-bar", "1.0.0"),
+                _row("foo", "foo-2.0.0-py38.conda", "foo", "2.0.0"),
+                _row("bar", "bar-1.0.0-py38.conda", "bar", "1.0.0"),
+            ],
+        )
+        rows = connection.execute(
+            "SELECT pypi_name, pypi_version FROM pypi_claim "
+            "WHERE conda_name = ? AND conda_version = ?",
+            ("foo", "1.0.0"),
+        ).fetchall()
+        assert set(rows) == {("foo", "1.0.0"), ("foo-bar", "1.0.0")}
+
+    def test_the_leading_prefix_lookup_uses_the_primary_keys_own_index(
+        self, connection: sqlite3.Connection
+    ) -> None:
+        write_relations(connection, [_row("foo", "foo-1.0.0-py38.conda", "foo", "1.0.0")])
+        plan = connection.execute(
+            "EXPLAIN QUERY PLAN SELECT * FROM pypi_claim "
+            "WHERE conda_name = ? AND conda_version = ?",
+            ("foo", "1.0.0"),
+        ).fetchall()
+        plan_text = " ".join(str(row) for row in plan)
+        assert "USING INDEX" in plan_text
+        assert "conda_name=? AND conda_version=?" in plan_text
+
+
+class TestPypiCondaMappingSchemaConstraints:
+    """`pypi_conda_mapping`'s primary key `(pypi_name, conda_name)` enforces
+    exactly one row per pair.
+    """
+
+    def test_duplicate_pair_is_rejected(self, connection: sqlite3.Connection) -> None:
+        write_relations(connection, [])  # creates the schema
+        connection.execute(
+            "INSERT INTO pypi_conda_mapping "
+            "(pypi_name, conda_name, name_axis, n_versions, n_versions_agree, "
+            " n_versions_no_signal, n_versions_disagree, vendored_only, claimed_by_other) "
+            "VALUES ('foo', 'foo', 'same', 1, 1, 0, 0, 0, 0)"
+        )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "INSERT INTO pypi_conda_mapping "
+                "(pypi_name, conda_name, name_axis, n_versions, n_versions_agree, "
+                " n_versions_no_signal, n_versions_disagree, vendored_only, claimed_by_other) "
+                "VALUES ('foo', 'foo', 'near', 2, 0, 0, 2, 1, 1)"
+            )
+
+
 class TestWriteRelationsSimpleSelfMapping:
     def test_self_mapping_agrees_and_is_not_contradicted(
         self, connection: sqlite3.Connection
@@ -727,6 +838,48 @@ class TestWriteRelationsVersionLevelAggregation:
         assert row["n_versions_agree"] == 1
 
 
+class TestWriteRelationsMultipleAgreeingVersions:
+    """Detects whether multiple versions of the same PyPI package map to the
+    same conda package: each distinct agreeing `pypi_version` adds its own
+    vote to `n_versions_agree`, so a pair corroborated across several
+    releases outweighs one corroborated by only a single release.
+    """
+
+    def test_two_distinct_agreeing_versions_both_count(
+        self, connection: sqlite3.Connection
+    ) -> None:
+        write_relations(
+            connection,
+            [
+                _row("foo", "foo-1.0.0-py38.conda", "foo", "1.0.0"),
+                _row("foo", "foo-2.0.0-py38.conda", "foo", "2.0.0"),
+            ],
+        )
+        row = _mapping_row(connection, "foo", "foo")
+        assert row is not None
+        assert row["n_versions"] == 2
+        assert row["n_versions_agree"] == 2
+
+    def test_an_agreeing_version_and_a_disagreeing_version_are_each_counted_on_their_own_axis(
+        self, connection: sqlite3.Connection
+    ) -> None:
+        # Two distinct pypi_versions of "foo": 1.0.0 agrees with conda 1.0.0,
+        # 9.9.9 is a real, different release that disagrees. Both must be
+        # tallied -- one per version -- not collapsed into a single verdict.
+        write_relations(
+            connection,
+            [
+                _row("foo", "foo-1.0.0-py38.conda", "foo", "1.0.0"),
+                _row("foo", "foo-1.0.0-py38.conda", "foo", "9.9.9"),
+            ],
+        )
+        row = _mapping_row(connection, "foo", "foo")
+        assert row is not None
+        assert row["n_versions"] == 2
+        assert row["n_versions_agree"] == 1
+        assert row["n_versions_disagree"] == 1
+
+
 # --------------------------------------------------------------------------
 # `_mapper_from_connection`
 # --------------------------------------------------------------------------
@@ -826,6 +979,22 @@ class TestParselmouthMapperMiss:
     def test_miss_on_empty_candidates(self, built_connection: sqlite3.Connection) -> None:
         mapper = _mapper_from_connection(built_connection)
         assert mapper(canonicalize_name("nonexistent"), ()) == ()
+
+
+# --------------------------------------------------------------------------
+# Default data source: docs/pypi_conda_mapping.md's "avoid Github rate
+# limits" decision
+# --------------------------------------------------------------------------
+
+
+class TestDefaultRelationsSource:
+    def test_default_channel_is_conda_forge(self) -> None:
+        assert DEFAULT_CHANNEL == "conda-forge"
+
+    def test_default_relations_url_is_the_documented_prefix_dev_bucket(self) -> None:
+        assert DEFAULT_RELATIONS_URL == (
+            "https://conda-mapping.prefix.dev/relations-v1/conda-forge/relations.jsonl.gz"
+        )
 
 
 # --------------------------------------------------------------------------
@@ -1015,6 +1184,42 @@ _URLLIB3_ROW = {
     "pypi_name": "urllib3",
     "pypi_version": "2.0.0",
 }
+
+
+class TestParselmouthVersionTable:
+    """`parselmouth_version` is a one-row table recording the etag of the
+    upstream data a database was built from (docs/parselmouth.md).
+    """
+
+    def test_a_fresh_build_stores_exactly_one_row_with_the_response_etag(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        url = "https://example.test/relations.jsonl.gz"
+        _install_fake_urlopen(monkeypatch, [_FakeHTTPResponse(_gzip_line(_REQUESTS_ROW), "etag-1")])
+        db_path = tmp_path / "parselmouth.sqlite3"
+
+        connection = open_parselmouth_database(db_path, relations_url=url)
+        try:
+            rows = connection.execute("SELECT url, etag FROM parselmouth_version").fetchall()
+            assert rows == [(url, "etag-1")]
+        finally:
+            connection.close()
+
+    def test_a_rebuild_from_the_same_url_updates_the_row_rather_than_adding_one(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        url = "https://example.test/relations.jsonl.gz"
+        db_path = tmp_path / "parselmouth.sqlite3"
+        _install_fake_urlopen(monkeypatch, [_FakeHTTPResponse(_gzip_line(_REQUESTS_ROW), "etag-1")])
+        open_parselmouth_database(db_path, relations_url=url).close()
+
+        _install_fake_urlopen(monkeypatch, [_FakeHTTPResponse(_gzip_line(_URLLIB3_ROW), "etag-2")])
+        connection = open_parselmouth_database(db_path, relations_url=url)
+        try:
+            rows = connection.execute("SELECT url, etag FROM parselmouth_version").fetchall()
+            assert rows == [(url, "etag-2")]
+        finally:
+            connection.close()
 
 
 class TestOpenParselmouthDatabase:

@@ -400,6 +400,27 @@ class TestMarkers:
             pep508_to_matchspec(entry, (aggregator_mapper,)) == 'requests[when="python>=3.9.0a0"]'
         )
 
+    def test_python_version_equality_marker_produces_a_rattler_valid_when_clause(self) -> None:
+        """`python_version == "X.Y"`'s anchored-range conversion is
+        validated end-to-end against py-rattler, not just checked as a
+        string -- the assembled matchspec must actually parse.
+        """
+        entry = 'requests; python_version == "3.9"'
+
+        assert pep508_to_matchspec(entry, (aggregator_mapper,)) == (
+            'requests[when="python>=3.9.0a0,<3.10.0a0"]'
+        )
+
+    def test_python_version_inequality_marker_produces_a_rattler_valid_when_clause(self) -> None:
+        """`python_version != "X.Y"` converts to a glob-with-`!=` form
+        (`python!=X.Y.*`) that is otherwise unusual for a plain version
+        specifier -- confirm py-rattler still accepts it inside a `when=`
+        clause end-to-end.
+        """
+        entry = 'requests; python_version != "3.9"'
+
+        assert pep508_to_matchspec(entry, (aggregator_mapper,)) == 'requests[when="python!=3.9.*"]'
+
     def test_combined_marker_preserves_and_or_structure(self) -> None:
         entry = 'requests; sys_platform == "win32" and python_version >= "3.9"'
 

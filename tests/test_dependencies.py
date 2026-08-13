@@ -10,7 +10,7 @@ from reroll.dependencies import calculate_dependencies, wheel_dependencies
 from reroll.dependencies.extras import find_extras
 from reroll.dependencies.python import python_dependencies
 from reroll.dependencies.requires_dist import strip_interpreter_requirements
-from reroll.errors import PythonRangeMismatchError
+from reroll.errors import InvalidAbiTagError, PythonRangeMismatchError
 from reroll.filename import Arch, WheelConfig
 from reroll.name_mapping import aggregator_mapper
 from reroll.subdir import CondaSubdir
@@ -208,6 +208,32 @@ class TestRequiresPythonTightening:
 
 
 # --------------------------------------------------------------------------
+# `python_dependencies`: an unexploded `abi3`/`abi3t` tag reaching this
+# layer is a reroll bug, not a caller error (docs/wheel_to_conda_dependencies.md's
+# "Wheel is a compiled wheel for a CPython floor, and abi3 or abi3t").
+# --------------------------------------------------------------------------
+
+
+class TestUnexplodedAbi3IsRejectedBeforeDependencyGeneration:
+    def test_constructing_a_config_with_a_raw_abi3_tag_raises_loudly(self) -> None:
+        """`explode_abi3` (`reroll.filename.abi3`) is supposed to turn
+        `abi3`/`abi3t` into concrete per-minor ABI tags before a
+        `WheelConfig` -- and therefore `python_dependencies` -- ever sees
+        one. Feeding the raw combo straight to `WheelConfig`, bypassing
+        that explosion step entirely, confirms this can't silently reach
+        dependency generation with wrong output: `WheelConfig` itself
+        raises `InvalidAbiTagError` at construction, before
+        `python_dependencies` is ever called.
+        """
+        with pytest.raises(InvalidAbiTagError):
+            _config(interpreter="cp39", abi="abi3")
+
+    def test_constructing_a_config_with_a_raw_abi3t_tag_raises_loudly(self) -> None:
+        with pytest.raises(InvalidAbiTagError):
+            _config(interpreter="cp313", abi="abi3t")
+
+
+# --------------------------------------------------------------------------
 # `strip_interpreter_requirements`: `Requires-Dist` interpreter stripping
 # --------------------------------------------------------------------------
 
@@ -297,6 +323,18 @@ class TestFindExtras:
         requires_dist = ('requests>=2.0.0; extra == "foo" or extra == "bar"',)
 
         assert find_extras(requires_dist) == {"foo", "bar"}
+
+    def test_multiple_extra_clauses_anded_together_are_both_found(self) -> None:
+        """Per docs/wheel_to_conda_dependencies.md's "parse the markers for
+        `extra == <name>` regardless of the conditional evaluation it might
+        be a part of": both names are collected even though `extra`
+        can never equal two different values at once, making the whole
+        marker unsatisfiable -- `find_extras` doesn't evaluate the marker,
+        it just walks it for every `extra ==` literal.
+        """
+        requires_dist = ('packagea; extra == "cli" and extra == "gui"',)
+
+        assert find_extras(requires_dist) == {"cli", "gui"}
 
     def test_nested_extra_clauses_are_found(self) -> None:
         requires_dist = ('packageA; (extra == "foo" or extra == "bar") and python_version < "3.9"',)

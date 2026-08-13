@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from markerpry import TRUE, parse
+from rattler import Version, VersionSpec
 
 from reroll.dependencies.marker_conversion import marker_condition
 from reroll.errors import UnconvertableMarkerError
@@ -37,6 +38,30 @@ class TestPythonVersion:
     def test_non_major_minor_literal_raises(self, literal: str) -> None:
         with pytest.raises(UnconvertableMarkerError, match="python_version"):
             marker_condition(parse(f'python_version == "{literal}"'))
+
+    def test_le_boundary_is_anchored_so_a_patch_release_still_matches(self) -> None:
+        """`python_version <= "3.9"` converts to `python<3.10.0a0`, not a
+        literal `python<=3.9` -- the anchor at the *next* minor's `.0a0`
+        is what lets a 3.9 patch release like 3.9.1 still satisfy the
+        condition; `<=3.9` alone would incorrectly exclude it.
+        """
+        condition = marker_condition(parse('python_version <= "3.9"'))
+
+        assert condition == "python<3.10.0a0"
+        assert VersionSpec("<3.10.0a0").matches(Version("3.9.1"))
+        assert not VersionSpec("<=3.9").matches(Version("3.9.1"))
+
+    def test_gt_boundary_is_anchored_so_a_patch_release_is_still_excluded(self) -> None:
+        """`python_version > "3.9"` converts to `python>=3.10.0a0`, not a
+        literal `python>3.9` -- the anchor at the *next* minor's `.0a0` is
+        what keeps a 3.9 patch release like 3.9.1 excluded; `>3.9` alone
+        would incorrectly include it.
+        """
+        condition = marker_condition(parse('python_version > "3.9"'))
+
+        assert condition == "python>=3.10.0a0"
+        assert not VersionSpec(">=3.10.0a0").matches(Version("3.9.1"))
+        assert VersionSpec(">3.9").matches(Version("3.9.1"))
 
 
 class TestPythonFullVersion:

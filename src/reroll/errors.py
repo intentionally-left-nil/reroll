@@ -110,6 +110,12 @@ class InvalidFilenameError(RerollInvalidWheelError):
     """A wheel filename does not conform to the PyPI wheel filename spec."""
 
 
+class InvalidWheelArchiveError(RerollInvalidWheelError):
+    """A wheel (zip archive) is not a valid zip file, or its entries do not
+    contain exactly one `*.dist-info/METADATA` file.
+    """
+
+
 class InvalidInterpreterTagError(RerollInvalidWheelError):
     """The interpreter tag does not match the `(py|cp)` + digits grammar."""
 

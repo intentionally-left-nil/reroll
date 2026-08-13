@@ -415,3 +415,32 @@ class TestWholeRecordRejection:
             "foo": ("requests >=2.0.0",),
             "bar": ("requests >=2.0.0",),
         }
+
+
+# --------------------------------------------------------------------------
+# `WheelDependencies` itself validates `depends`/`extra_depends` -- shared
+# with `WheelRecord` (reroll/__init__.py) so both get the same guarantee.
+# --------------------------------------------------------------------------
+
+
+class TestWheelDependenciesValidation:
+    def test_rejects_an_invalid_matchspec_in_depends(self) -> None:
+        with pytest.raises(UnconvertableRequirementError):
+            WheelDependencies(depends=("python >=1.0,<",), extra_depends={})
+
+    def test_rejects_an_invalid_matchspec_in_extra_depends(self) -> None:
+        with pytest.raises(UnconvertableRequirementError):
+            WheelDependencies(depends=(), extra_depends={"standard": ("python >=1.0,<",)})
+
+    def test_rejects_an_invalid_extra_name_key(self) -> None:
+        with pytest.raises(UnconvertableRequirementError):
+            WheelDependencies(depends=(), extra_depends={"Not Valid": ()})
+
+    def test_accepts_valid_depends_and_extra_depends(self) -> None:
+        result = WheelDependencies(
+            depends=("python >=3.9",),
+            extra_depends={"standard": ("httpx >=0.23.0",)},
+        )
+
+        assert result.depends == ("python >=3.9",)
+        assert result.extra_depends == {"standard": ("httpx >=0.23.0",)}

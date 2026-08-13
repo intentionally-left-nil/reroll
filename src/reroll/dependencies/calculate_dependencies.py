@@ -4,10 +4,9 @@ docs/wheel_to_conda_dependencies.md's "Calculating extras" algorithm.
 
 from __future__ import annotations
 
-from typing import NamedTuple
-
 from markerpry import TRUE, parse_marker
 from packaging.requirements import Requirement
+from pydantic import BaseModel, ConfigDict
 
 from reroll.dependencies.conditional_dependency import conditional_dependency
 from reroll.dependencies.extras import find_extras
@@ -15,6 +14,7 @@ from reroll.dependencies.pep508_to_matchspec import pep508_to_matchspec
 from reroll.dependencies.python import python_dependencies, python_range
 from reroll.dependencies.requires_dist import strip_interpreter_requirements
 from reroll.filename import WheelConfig
+from reroll.matchspec import CondaExtraName, MatchSpecStr
 from reroll.name_mapping import NameMappers
 from reroll.subdir import CondaSubdir
 from reroll.wheel_metadata import WheelMetadata
@@ -22,12 +22,14 @@ from reroll.wheel_metadata import WheelMetadata
 __all__ = ["WheelDependencies", "calculate_dependencies"]
 
 
-class WheelDependencies(NamedTuple):
+class WheelDependencies(BaseModel):
     """A wheel's converted conda dependencies: `depends`, the MatchSpecs
     every install of the package needs, and `extra_depends`, the
     additional MatchSpecs needed per extra (keyed by normalized extra
     name, `reroll.dependencies.extras.find_extras`) only when that extra
-    is requested.
+    is requested. `WheelRecord` (`reroll.__init__`) inherits this model
+    rather than redeclaring its own copies of these two fields, so both
+    get the same MatchSpec/extra-name validation.
 
     A MatchSpec never appears in both `depends` and one of
     `extra_depends`' lists -- `calculate_dependencies` removes any exact
@@ -36,8 +38,10 @@ class WheelDependencies(NamedTuple):
     still share a MatchSpec between themselves; that's not deduplicated.
     """
 
-    depends: tuple[str, ...]
-    extra_depends: dict[str, tuple[str, ...]]
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    depends: tuple[MatchSpecStr, ...]
+    extra_depends: dict[CondaExtraName, tuple[MatchSpecStr, ...]]
 
 
 def calculate_dependencies(

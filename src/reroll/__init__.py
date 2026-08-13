@@ -1,11 +1,14 @@
-"""reroll: generate conda v3 repodata records from a wheel's METADATA file.
+"""reroll: generate conda v3 repodata records from a wheel file.
 
-`reroll()` converts a wheel's METADATA and filename into its `WheelRecord`(s).
+`reroll()` reads a wheel's `.dist-info/METADATA`, then converts it (plus the
+wheel's filename) into its `WheelRecord`(s). `reroll.stages` exposes each
+step of that pipeline (`extract_metadata_file`, `parse_metadata`,
+`get_wheel_records`) individually.
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from pathlib import Path
 
 from reroll.default_mappers import default_mappers
 from reroll.errors import (
@@ -25,6 +28,9 @@ from reroll.name_mapping import (
     map_name,
     static_mapper,
 )
+from reroll.stages import extract_metadata_file, get_wheel_records, parse_metadata
+from reroll.wheel_metadata import WheelMetadata
+from reroll.wheel_record import WheelRecord
 
 __all__ = [
     "Candidate",
@@ -37,6 +43,7 @@ __all__ = [
     "RerollScopeError",
     "RerollUnconvertableError",
     "UnresolvedCondaNameError",
+    "WheelMetadata",
     "WheelRecord",
     "aggregator_mapper",
     "default_mappers",
@@ -46,35 +53,37 @@ __all__ = [
 ]
 
 
-class WheelRecord(BaseModel):
-    """A single wheel's contribution to a repodata.json `v3.whl` map."""
+def reroll(
+    path: str | Path,
+    *,
+    mappers: NameMappers | None = None,
+    allow_pre: bool = False,
+    abi3_upper_bound: str | None = None,
+    sha256: str | None = None,
+    size: int | None = None,
+    url: str | None = None,
+) -> tuple[WheelRecord, ...]:
+    """Convert the wheel file at `path` into its repodata record(s): its
+    filename's `WheelConfig`(s) combined with its `.dist-info/METADATA`
+    (`reroll.stages.extract_metadata_file`, `reroll.stages.parse_metadata`,
+    `reroll.stages.get_wheel_records`, in that order).
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    `mappers` defaults to `default_mappers()` -- the chain of grayskull,
+    conda-lock, and parselmouth mappers, aggregated by `aggregator_mapper`
+    -- when not given explicitly.
 
-    name: str
-    version: str
-    build: str
-    build_number: int
-    subdir: str
-    depends: tuple[str, ...]
-    url: str
-    noarch: str | None = None
-    license: str | None = None
-
-
-def reroll(metadata: str, filename: str) -> tuple[WheelRecord, ...]:
-    """Convert a wheel's METADATA (plus its filename) into its repodata record(s)."""
-    del metadata, filename  # not yet parsed; see docstring
-    return (
-        WheelRecord(
-            name="tinylib",
-            version="1.2.3",
-            build="py3_none_any_0",
-            build_number=0,
-            subdir="noarch",
-            noarch="python",
-            license="MIT",
-            depends=("requests >=2.20", "python >=3.9"),
-            url="tinylib-1.2.3-py3-none-any.whl",
-        ),
+    `sha256`, `size`, and `url` are never computed from `path` -- each is
+    set on every returned record only if passed in here (docs/wheel_record.md).
+    """
+    metadata_text = extract_metadata_file(path)
+    metadata = parse_metadata(metadata_text)
+    return get_wheel_records(
+        metadata,
+        Path(path).name,
+        mappers=mappers,
+        allow_pre=allow_pre,
+        abi3_upper_bound=abi3_upper_bound,
+        sha256=sha256,
+        size=size,
+        url=url,
     )

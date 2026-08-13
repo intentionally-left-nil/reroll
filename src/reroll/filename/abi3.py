@@ -24,11 +24,12 @@ def explode_abi3(tags: Iterable[Tag], *, abi3_upper_bound: str | None = None) ->
     `abi3_upper_bound` (a minor-only version string like `"3.15"`;
     `abi3_upper_bound="3.15.3"` is rejected). A stable-ABI tag whose own
     `(interpreter, abi)` pairing is illegal -- a bad interpreter shape, or a
-    floor below the ABI's own (`check_interpreter_abi`) -- is left unchanged
-    rather than exploded, since `WheelConfig` never accepts a raw
-    `abi3`/`abi3t` tag and will reject it there instead. All other tags pass
-    through unchanged too. The result is deduplicated against both itself
-    and any unrelated tags already present.
+    floor below the ABI's own (`check_interpreter_abi`) -- or whose floor is
+    already past `abi3_upper_bound` (so its per-minor range would be empty)
+    is left unchanged rather than exploded, since `WheelConfig` never
+    accepts a raw `abi3`/`abi3t` tag and will reject it there instead. All
+    other tags pass through unchanged too. The result is deduplicated
+    against both itself and any unrelated tags already present.
 
     `abi3_upper_bound=None` defers to `latest_python_minor`, but only once
     at least one stable-ABI tag is actually present -- a wheel with no
@@ -54,6 +55,12 @@ def _explode_one(tag: Tag, upper_minor: int) -> frozenset[Tag]:
         return frozenset({tag})
 
     _, _, floor_minor = parse_interpreter(tag.interpreter)
+    if floor_minor > upper_minor:
+        # A legal pairing whose floor is already past `abi3_upper_bound`
+        # explodes to an empty range -- leave it unchanged instead, so it
+        # still reaches `WheelConfig`'s raw-`abi3`/`abi3t` rejection rather
+        # than vanishing without a trace.
+        return frozenset({tag})
     free_threaded = tag.abi == "abi3t"
     return frozenset(
         Tag(f"cp3{minor}", f"cp3{minor}t" if free_threaded else f"cp3{minor}", tag.platform)

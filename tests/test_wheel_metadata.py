@@ -7,7 +7,6 @@ import logging
 import pytest
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
-from pydantic import ValidationError
 
 from reroll.errors import (
     InvalidMetadataError,
@@ -41,7 +40,12 @@ class TestName:
         assert metadata.name == "tiny-lib-x"
 
     def test_missing_is_rejected(self) -> None:
-        with pytest.raises(ValidationError):
+        """A missing `Name` fails pydantic's own required-`str` check on
+        `_NormalizedDistName` before `_normalize_dist_name` ever runs, so
+        `_normalize_dist_name`'s `InvalidMetadataError` re-raise (covered by
+        `test_pep_345_style_name_is_rejected` etc.) does not apply here.
+        """
+        with pytest.raises(InvalidMetadataError):
             parse_metadata(_text("Metadata-Version: 2.1", "Version: 1.0"))
 
     def test_duplicate_header_with_differing_values_is_rejected(self) -> None:
@@ -229,13 +233,32 @@ class TestVersion:
         assert metadata.version == Version("1.2.3")
 
     def test_missing_is_rejected(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidMetadataError):
             parse_metadata(_text("Metadata-Version: 2.1", "Name: tinylib"))
 
     def test_invalid_version_is_rejected(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidMetadataError):
             parse_metadata(
                 _text("Metadata-Version: 2.1", "Name: tinylib", "Version: not-a-version")
+            )
+
+
+# --------------------------------------------------------------------------
+# `parse_metadata` <-> field-validation failures other than `name`'s
+# --------------------------------------------------------------------------
+
+
+class TestFieldValidationRaisesInvalidMetadataError:
+    """`TestName.test_missing_is_rejected` and `TestVersion`'s two cases
+    above cover this with synthetic METADATA text; this class adds a real
+    corpus repro: `HolyGrail` / `HolyGrail-0.2.1.Perceval-py2-none-any.whl`
+    (`Version: 0.2.1.Perceval`, not a valid PEP 440 version).
+    """
+
+    def test_invalid_version_raises_invalid_metadata_error(self) -> None:
+        with pytest.raises(InvalidMetadataError):
+            parse_metadata(
+                _text("Metadata-Version: 2.1", "Name: HolyGrail", "Version: 0.2.1.Perceval")
             )
 
 
@@ -817,5 +840,5 @@ class TestEmptyMetadata:
         Both are already rejected individually; this locks in that the
         combination is too.
         """
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidMetadataError):
             parse_metadata("")

@@ -715,15 +715,103 @@ class TestAggregatorMapper:
 
         assert result == "opencv"
 
-    def test_parselmouth_as_the_only_mapper_with_multiple_candidates_defers(self) -> None:
+    def test_parselmouth_with_multiple_candidates_below_the_confidence_threshold_defers(
+        self,
+    ) -> None:
+        """More than one candidate loses parselmouth's unconditional
+        "only candidate" exemption, so it's held to the same probability
+        threshold as any other sole mapper -- and must still defer below
+        it.
+        """
         candidates = (
-            _parselmouth_candidate("opencv", 0.9),
+            _parselmouth_candidate("opencv", 0.85),
             _parselmouth_candidate("opencv-python", 0.4),
         )
 
         result = aggregator_mapper(canonicalize_name("opencv"), candidates)
 
         assert result is candidates
+
+    # A single mapper's candidates are held to the same probability
+    # threshold regardless of source -- including parselmouth, once it has
+    # contributed more than one candidate (its own unconditional exemption,
+    # tested above, applies only to a lone candidate).
+
+    def test_single_mapper_parselmouth_multiple_candidates_at_confidence_threshold_resolves(
+        self,
+    ) -> None:
+        """Real corpus data (`01OS`/`01os-0.0.1-py3-none-any.whl`,
+        `fastapi`): a single mapper (`parselmouth_relations`) offers two
+        `probability=0.95` candidates for the same PyPI name. Resolves to
+        the best (here, tied) candidate.
+        """
+        candidates = (
+            _parselmouth_candidate("fastapi", 0.95),
+            _parselmouth_candidate("fastapi-core", 0.95),
+        )
+
+        result = aggregator_mapper(canonicalize_name("fastapi"), candidates)
+
+        assert result == "fastapi"
+
+    def test_single_mapper_parselmouth_multiple_candidates_low_probability_noise_resolves_to_winner(
+        self,
+    ) -> None:
+        """Real corpus data (`01memories`/`01memories-0.0.27-py3-none-any.whl`,
+        `pillow`): four near-zero-probability candidates alongside the one
+        that should win (0.9413, comfortably above the 0.9 threshold).
+        """
+        candidates = (
+            _parselmouth_candidate("arm_pyart", 0.0086),
+            _parselmouth_candidate("finesse", 0.0086),
+            _parselmouth_candidate("pillow", 0.9413),
+            _parselmouth_candidate("pyautogui", 0.0086),
+            _parselmouth_candidate("rosco", 0.0086),
+        )
+
+        result = aggregator_mapper(canonicalize_name("pillow"), candidates)
+
+        assert result == "pillow"
+
+    def test_single_mapper_parselmouth_multiple_candidates_below_confidence_threshold_defers(
+        self,
+    ) -> None:
+        """A single-mapper parselmouth result with more than one candidate
+        must still defer when the best candidate is below 0.9.
+        """
+        candidates = (
+            _parselmouth_candidate("levenshtein", 0.5),
+            _parselmouth_candidate("python-levenshtein", 0.3),
+        )
+
+        result = aggregator_mapper(canonicalize_name("levenshtein"), candidates)
+
+        assert result is candidates
+
+    def test_used_end_to_end_the_fastapi_corpus_case_resolves_through_map_name(
+        self,
+    ) -> None:
+        """The same `fastapi` case as above, but driven through `map_name`
+        with a stub contributing mapper -- matching how
+        `reroll_data.reroll_index_demo.wheel_to_records` actually calls
+        this chain end to end. Reproduces the exact input stored for
+        `01OS`/`01os-0.0.1-py3-none-any.whl` in the corpus.
+        """
+        contributed = (
+            _parselmouth_candidate("fastapi", 0.95),
+            _parselmouth_candidate("fastapi-core", 0.95),
+        )
+
+        def _contributor(
+            name: NormalizedName,
+            candidates: Sequence[Candidate],
+        ) -> Sequence[Candidate]:
+            del name, candidates
+            return contributed
+
+        result = map_name("fastapi", (_contributor, aggregator_mapper))
+
+        assert result == "fastapi"
 
     # End to end through `map_name`.
 

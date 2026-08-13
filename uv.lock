@@ -652,14 +652,14 @@ wheels = [
 
 [[package]]
 name = "markerpry"
-version = "0.5.0"
+version = "0.5.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "packaging" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9b/30/a27295aead52a76ab1c8d57b12a1a94aee7477c16c3f49971360fa75660d/markerpry-0.5.0.tar.gz", hash = "sha256:24ce803f3cad80593f372e463a49baa547e175db723b6e81d4a367a5002235df", size = 10480, upload-time = "2026-08-10T03:18:57.63Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a3/f9/5f3339edbda46aab5bf649180bb48068f2968783c4bb0e7bbfabd61d7683/markerpry-0.5.1.tar.gz", hash = "sha256:ff2ccc7bb4062ae8fce861542ca5305afa830e77efde96075e34d0991c9c87ac", size = 10853, upload-time = "2026-08-13T15:58:19.392Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/00/0e/fce20626216cfe9c771c00c1d22336012e98e5683dc09a6f53c09a26828d/markerpry-0.5.0-py3-none-any.whl", hash = "sha256:0dff034f53f6889ddd07063d05d47f78c9df224b37b9b0a5dd5d6e4659fc36a5", size = 12543, upload-time = "2026-08-10T03:18:56.562Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/66/e23613568fc01ca3e44149b3440c92254dd04568d3c835360a96d4f58151/markerpry-0.5.1-py3-none-any.whl", hash = "sha256:f0a9b1be4c35fdb4570b9df6b64e9b2be884140a3c606be59808f3a1dea231c3", size = 12929, upload-time = "2026-08-13T15:58:18.297Z" },
 ]
 
 [[package]]
@@ -869,7 +869,7 @@ dev = [
 requires-dist = [
     { name = "conda-lock", specifier = ">=4.0.2" },
     { name = "grayskull", specifier = ">=3.1.1" },
-    { name = "markerpry", specifier = ">=0.5.0" },
+    { name = "markerpry", specifier = ">=0.5.1" },
     { name = "packaging", specifier = ">=26.1" },
     { name = "py-rattler", specifier = ">=0.25.0" },
     { name = "pydantic", specifier = ">=2.13.4" },

@@ -6,7 +6,7 @@ See docs/matchspec.md.
 from __future__ import annotations
 
 from markerpry import Node, parse_marker
-from packaging.requirements import Requirement
+from packaging.requirements import InvalidRequirement, Requirement
 from packaging.specifiers import Specifier, SpecifierSet
 from packaging.utils import NormalizedName, canonicalize_name
 from packaging.version import InvalidVersion, Version
@@ -15,7 +15,7 @@ from rattler.exceptions import InvalidMatchSpecError
 
 from reroll.dependencies.marker_conversion import UnconvertableMarkerError, marker_condition
 from reroll.dependencies.version_format import format_version
-from reroll.errors import UnconvertableRequirementError
+from reroll.errors import InvalidRequirementError, UnconvertableRequirementError
 from reroll.name_mapping import NameMappers, map_name
 
 _MAX_EXTRA_LENGTH = 64
@@ -40,12 +40,18 @@ def pep508_to_matchspec(
     than an environment marker, and combining it with a real environment
     condition isn't implemented here); or an assembled MatchSpec string
     that fails py-rattler's own validation. Also raises
-    `reroll.errors.UnconvertableMarkerError` for a marker using a construct
-    that has no matchspec equivalent, and
+    `InvalidRequirementError` if `entry` itself does not parse as a PEP 508
+    requirement, `reroll.errors.UnconvertableMarkerError` for a marker
+    using a construct that has no matchspec equivalent, and
     `reroll.errors.UnresolvedCondaNameError` for a PyPI name with no
     resolvable conda name.
     """
-    requirement = Requirement(entry)
+    try:
+        requirement = Requirement(entry)
+    except InvalidRequirement as exc:
+        raise InvalidRequirementError(
+            f"cannot parse {entry!r} as a PEP 508 requirement: {exc}"
+        ) from exc
     marker_node = parse_marker(requirement.marker) if requirement.marker is not None else None
     if marker_node is not None and "extra" in marker_node:
         raise UnconvertableRequirementError(

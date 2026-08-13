@@ -17,7 +17,7 @@ import pytest
 from packaging.utils import canonicalize_name
 
 from reroll.errors import CacheWriteError, DatabaseError, NetworkFetchError
-from reroll.name_mapping import Candidate, CandidateSource
+from reroll.name_mapping import Candidate, CandidateSource, aggregator_mapper, map_name
 from reroll.parselmouth_mapper import (
     BASE_PROBABILITY,
     DEFAULT_CHANNEL,
@@ -1441,3 +1441,66 @@ class TestParselmouthAgainstRealData:
         second = download_relations(DEFAULT_RELATIONS_URL, dest=dest, etag=first.etag)
         assert second.changed is False
         assert second.etag == first.etag
+
+
+# --------------------------------------------------------------------------
+# `aggregator_mapper` fed by real published data (network) -- integration
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="class")
+def real_relations_connection(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[sqlite3.Connection]:
+    """One real download/build of parselmouth's relations table (~90MB),
+    shared by every test in `TestAggregatorMapperAgainstRealData` rather
+    than repeated per test. A module-level (not class-method) fixture --
+    pytest 9 deprecates a class-scoped fixture defined as an instance
+    method, and this project's `filterwarnings = ["error"]` turns that
+    deprecation into a setup-time error.
+    """
+    db_path = tmp_path_factory.mktemp("parselmouth") / "parselmouth.sqlite3"
+    connection = open_parselmouth_database(db_path)
+    try:
+        yield connection
+    finally:
+        connection.close()
+
+
+class TestAggregatorMapperAgainstRealData:
+    """`aggregator_mapper` fed by `parselmouth_mapper`'s real, live evidence
+    (not a hand-built `Candidate` fixture) for two PyPI names -- a real
+    single-mapper parselmouth result with more than one candidate, whose
+    best candidate clears the 0.9 threshold `aggregator_mapper` applies to
+    any sole mapper's candidates. Confirms the resolution is reachable
+    through the real pipeline, not just the hand-constructed `Candidate`
+    tuples in `test_name_mapping.py`.
+    """
+
+    @pytest.mark.network
+    def test_fastapi_resolves_end_to_end(
+        self, real_relations_connection: sqlite3.Connection
+    ) -> None:
+        """`fastapi`'s real parselmouth evidence is a single mapper
+        (`parselmouth_relations`) offering two `probability=0.95`
+        candidates (`fastapi`, `fastapi-core`); resolves to `fastapi`.
+        """
+        mapper = _mapper_from_connection(real_relations_connection)
+
+        result = map_name("fastapi", (mapper, aggregator_mapper))
+
+        assert result == "fastapi"
+
+    @pytest.mark.network
+    def test_pillow_resolves_end_to_end_with_low_probability_noise(
+        self, real_relations_connection: sqlite3.Connection
+    ) -> None:
+        """`pillow`'s real evidence: one dominant `probability` candidate
+        (`0.9413`) alongside several near-zero-probability noise candidates
+        from that same single mapper.
+        """
+        mapper = _mapper_from_connection(real_relations_connection)
+
+        result = map_name("pillow", (mapper, aggregator_mapper))
+
+        assert result == "pillow"

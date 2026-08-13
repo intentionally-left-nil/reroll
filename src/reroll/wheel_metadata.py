@@ -8,7 +8,7 @@ from typing import Annotated
 from packaging.licenses import InvalidLicenseExpression, canonicalize_license_expression
 from packaging.metadata import RawMetadata, parse_email
 from packaging.utils import InvalidName, canonicalize_name
-from pydantic import AfterValidator, BaseModel, ConfigDict, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, ValidationError, field_validator
 
 from reroll.errors import InvalidMetadataError
 from reroll.filename.py_version import PyVersion
@@ -110,29 +110,37 @@ class WheelMetadata(BaseModel):
 def parse_metadata(metadata: str) -> WheelMetadata:
     """Parse a wheel's `.dist-info/METADATA` contents into a `WheelMetadata`.
     Only fields that reroll cares about are recorded.
+
+    Raises `InvalidMetadataError` for a missing or malformed `name`/
+    `version` (or any other field that fails its own validation), in
+    addition to the header-level failures `_single_value_field` already
+    raises.
     """
     raw, unparsed = parse_email(metadata)
     classifiers = raw.get("classifiers") or []
-    return WheelMetadata.model_validate(
-        {
-            "name": _single_value_field(raw, unparsed, "name", "name"),
-            "version": _single_value_field(raw, unparsed, "version", "version"),
-            "license_expression": _single_value_field(
-                raw, unparsed, "license_expression", "license-expression"
-            ),
-            "license": _single_value_field(raw, unparsed, "license", "license"),
-            "license_classifiers": tuple(
-                classifier
-                for classifier in classifiers
-                if classifier.startswith(_LICENSE_CLASSIFIER_PREFIX)
-            ),
-            "requires_python": _single_value_field(
-                raw, unparsed, "requires_python", "requires-python"
-            ),
-            "requires_dist": tuple(raw.get("requires_dist") or ()),
-            "provides_extra": tuple(raw.get("provides_extra") or ()),
-        }
-    )
+    try:
+        return WheelMetadata.model_validate(
+            {
+                "name": _single_value_field(raw, unparsed, "name", "name"),
+                "version": _single_value_field(raw, unparsed, "version", "version"),
+                "license_expression": _single_value_field(
+                    raw, unparsed, "license_expression", "license-expression"
+                ),
+                "license": _single_value_field(raw, unparsed, "license", "license"),
+                "license_classifiers": tuple(
+                    classifier
+                    for classifier in classifiers
+                    if classifier.startswith(_LICENSE_CLASSIFIER_PREFIX)
+                ),
+                "requires_python": _single_value_field(
+                    raw, unparsed, "requires_python", "requires-python"
+                ),
+                "requires_dist": tuple(raw.get("requires_dist") or ()),
+                "provides_extra": tuple(raw.get("provides_extra") or ()),
+            }
+        )
+    except ValidationError as exc:
+        raise InvalidMetadataError(f"invalid METADATA: {exc}") from exc
 
 
 def _single_value_field(

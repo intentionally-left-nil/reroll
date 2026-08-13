@@ -6,7 +6,6 @@ import logging
 from collections.abc import Sequence
 
 import pytest
-from packaging.requirements import InvalidRequirement
 from packaging.utils import NormalizedName
 
 from reroll.dependencies.pep508_to_matchspec import pep508_to_matchspec
@@ -321,13 +320,8 @@ class TestRejections:
 
 
 class TestMalformedEntryLeaksInvalidRequirement:
-    """Confirmed bug (reroll-data's `reroll_failure_analysis` notebook,
-    root-caused across `reroll` + `markerpry`, 26 rows as
-    `unexpected: InvalidRequirement`): `pep508_to_matchspec`'s
-    `requirement = Requirement(entry)` has no `try`/`except`, so any
-    caller-assembled `entry` that fails PEP 508 parsing leaks a bare
-    `packaging.requirements.InvalidRequirement` instead of one of this
-    module's own documented `RerollError`s.
+    """A caller-assembled `entry` that fails PEP 508 parsing raises
+    `InvalidRequirementError`, not a bare `packaging.requirements.InvalidRequirement`.
 
     One concrete way `calculate_dependencies` assembles such an `entry`:
     `markerpry`'s `CompareNode.__str__` (`markerpry/node.py:99`)
@@ -341,33 +335,14 @@ class TestMalformedEntryLeaksInvalidRequirement:
     unparseable `extra == ":python-version=="2-6""`). `entry` below is
     exactly that rendered string, standing in for whatever upstream
     assembly produced it -- this test is about `pep508_to_matchspec`'s own
-    missing `except`, independent of whether `markerpry` is ever fixed.
+    error handling, independent of whether `markerpry`'s quoting is ever
+    fixed.
     """
 
-    _REASON = (
-        "pep508_to_matchspec's `requirement = Requirement(entry)` "
-        "(src/reroll/dependencies/pep508_to_matchspec.py) has no try/except, "
-        "so a malformed `entry` leaks a bare "
-        "packaging.requirements.InvalidRequirement instead of an "
-        "InvalidRequirementError. See reroll-data's "
-        "reroll_failure_analysis notebook, section 5a (unexpected: "
-        "InvalidRequirement)."
-    )
-
-    @pytest.mark.xfail(raises=InvalidRequirement, reason=_REASON, strict=True)
-    def test_unparseable_entry_should_raise_invalid_requirement_error(self) -> None:
+    def test_unparseable_entry_raises_invalid_requirement_error(self) -> None:
         entry = 'ordereddict==1.1; extra == ":python-version=="2-6""'
 
         with pytest.raises(InvalidRequirementError):
-            pep508_to_matchspec(entry, (aggregator_mapper,))
-
-    def test_confirms_the_leaked_exception_really_is_the_bare_packaging_one(self) -> None:
-        """Not `xfail`: pins down *which* exception currently escapes, so a
-        fix that raises a different, still-wrong exception is caught too.
-        """
-        entry = 'ordereddict==1.1; extra == ":python-version=="2-6""'
-
-        with pytest.raises(InvalidRequirement):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
 

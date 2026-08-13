@@ -7,7 +7,6 @@ import logging
 import pytest
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
-from pydantic import ValidationError
 
 from reroll.errors import (
     InvalidMetadataError,
@@ -27,22 +26,6 @@ def _text(*lines: str) -> str:
     return "\n".join(lines) + "\n\n"
 
 
-_VALIDATION_ERROR_LEAK_REASON = (
-    "parse_metadata's WheelMetadata.model_validate(...) call "
-    "(src/reroll/wheel_metadata.py) has no try/except, so a "
-    "field-validation failure other than name's (which "
-    "_normalize_dist_name already catches and re-raises) leaks a bare "
-    "pydantic.ValidationError instead of InvalidMetadataError. See "
-    "reroll-data's reroll_failure_analysis notebook, section 5a "
-    "(unexpected: ValidationError)."
-)
-"""Confirmed bug (reroll-data's `reroll_failure_analysis` notebook, 42 rows
-as `unexpected: ValidationError`): shared by every `xfail` below that
-currently leaks a bare `pydantic.ValidationError` from `parse_metadata`
-instead of `InvalidMetadataError`.
-"""
-
-
 # --------------------------------------------------------------------------
 # `name`
 # --------------------------------------------------------------------------
@@ -56,14 +39,11 @@ class TestName:
 
         assert metadata.name == "tiny-lib-x"
 
-    @pytest.mark.xfail(raises=ValidationError, reason=_VALIDATION_ERROR_LEAK_REASON, strict=True)
     def test_missing_is_rejected(self) -> None:
         """A missing `Name` fails pydantic's own required-`str` check on
         `_NormalizedDistName` before `_normalize_dist_name` ever runs, so
         `_normalize_dist_name`'s `InvalidMetadataError` re-raise (covered by
-        `test_pep_345_style_name_is_rejected` etc.) does not apply here --
-        this leaks the same bare `pydantic.ValidationError` `TestVersion`'s
-        missing-field case does.
+        `test_pep_345_style_name_is_rejected` etc.) does not apply here.
         """
         with pytest.raises(InvalidMetadataError):
             parse_metadata(_text("Metadata-Version: 2.1", "Version: 1.0"))
@@ -252,12 +232,10 @@ class TestVersion:
 
         assert metadata.version == Version("1.2.3")
 
-    @pytest.mark.xfail(raises=ValidationError, reason=_VALIDATION_ERROR_LEAK_REASON, strict=True)
     def test_missing_is_rejected(self) -> None:
         with pytest.raises(InvalidMetadataError):
             parse_metadata(_text("Metadata-Version: 2.1", "Name: tinylib"))
 
-    @pytest.mark.xfail(raises=ValidationError, reason=_VALIDATION_ERROR_LEAK_REASON, strict=True)
     def test_invalid_version_is_rejected(self) -> None:
         with pytest.raises(InvalidMetadataError):
             parse_metadata(
@@ -270,26 +248,15 @@ class TestVersion:
 # --------------------------------------------------------------------------
 
 
-class TestFieldValidationLeaksBarePydanticError:
-    """`TestName.test_missing_is_rejected` and `TestVersion`'s two `xfail`
-    cases above cover the bug with synthetic METADATA text; this class adds
-    a real corpus repro: `HolyGrail` /
-    `HolyGrail-0.2.1.Perceval-py2-none-any.whl` (`Version: 0.2.1.Perceval`,
-    not a valid PEP 440 version).
+class TestFieldValidationRaisesInvalidMetadataError:
+    """`TestName.test_missing_is_rejected` and `TestVersion`'s two cases
+    above cover this with synthetic METADATA text; this class adds a real
+    corpus repro: `HolyGrail` / `HolyGrail-0.2.1.Perceval-py2-none-any.whl`
+    (`Version: 0.2.1.Perceval`, not a valid PEP 440 version).
     """
 
-    @pytest.mark.xfail(raises=ValidationError, reason=_VALIDATION_ERROR_LEAK_REASON, strict=True)
-    def test_invalid_version_should_raise_invalid_metadata_error(self) -> None:
+    def test_invalid_version_raises_invalid_metadata_error(self) -> None:
         with pytest.raises(InvalidMetadataError):
-            parse_metadata(
-                _text("Metadata-Version: 2.1", "Name: HolyGrail", "Version: 0.2.1.Perceval")
-            )
-
-    def test_confirms_the_leaked_exception_really_is_the_bare_pydantic_one(self) -> None:
-        """Not `xfail`: pins down *which* exception currently escapes, so a
-        fix that raises a different, still-wrong exception is caught too.
-        """
-        with pytest.raises(ValidationError):
             parse_metadata(
                 _text("Metadata-Version: 2.1", "Name: HolyGrail", "Version: 0.2.1.Perceval")
             )
@@ -867,7 +834,6 @@ class TestEncodingChallenges:
 
 
 class TestEmptyMetadata:
-    @pytest.mark.xfail(raises=ValidationError, reason=_VALIDATION_ERROR_LEAK_REASON, strict=True)
     def test_empty_content_is_rejected(self) -> None:
         """A zero-byte `METADATA` file -- e.g. from a corrupted download --
         has no headers at all, so both `name` and `version` come back empty.

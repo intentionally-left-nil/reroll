@@ -715,9 +715,16 @@ class TestAggregatorMapper:
 
         assert result == "opencv"
 
-    def test_parselmouth_as_the_only_mapper_with_multiple_candidates_defers(self) -> None:
+    def test_parselmouth_with_multiple_candidates_below_the_confidence_threshold_defers(
+        self,
+    ) -> None:
+        """More than one candidate loses parselmouth's unconditional
+        "only candidate" exemption, so it's held to the same probability
+        threshold as any other sole mapper -- and must still defer below
+        it.
+        """
         candidates = (
-            _parselmouth_candidate("opencv", 0.9),
+            _parselmouth_candidate("opencv", 0.85),
             _parselmouth_candidate("opencv-python", 0.4),
         )
 
@@ -725,38 +732,18 @@ class TestAggregatorMapper:
 
         assert result is candidates
 
-    # Confirmed bug (reroll-data's `reroll_failure_analysis` notebook, 57.8%
-    # of every reroll failure in that corpus, 4,419,408/7,649,188 rows): the
-    # docstring above promises two independent single-mapper acceptance
-    # rules -- "a sole mapper's candidate scoring at least 0.9, **or**
-    # parselmouth's only candidate" -- but the `if source is PARSELMOUTH:
-    # ... else: ...` structure makes the probability-threshold branch
-    # unreachable for parselmouth, so a single parselmouth mapper offering
-    # more than one candidate is rejected no matter how confident its best
-    # candidate is. These are `xfail` (not yet fixed) rather than assertions
-    # of current behavior: they pin down the *documented* contract so a
-    # follow-up fix to `aggregator_mapper` turns them green without needing
-    # to be rewritten.
+    # A single mapper's candidates are held to the same probability
+    # threshold regardless of source -- including parselmouth, once it has
+    # contributed more than one candidate (its own unconditional exemption,
+    # tested above, applies only to a lone candidate).
 
-    _AGGREGATOR_BUG_REASON = (
-        "aggregator_mapper (src/reroll/name_mapping.py:105-112) only "
-        "applies the probability>=0.9 threshold to non-parselmouth sources; "
-        "a single-mapper parselmouth result with >1 candidate is always "
-        "deferred instead. See reroll-data's reroll_failure_analysis "
-        "notebook, section 4a/4."
-    )
-
-    @pytest.mark.xfail(reason=_AGGREGATOR_BUG_REASON, strict=True)
-    def test_single_mapper_parselmouth_multiple_candidates_at_confidence_threshold_should_resolve(
+    def test_single_mapper_parselmouth_multiple_candidates_at_confidence_threshold_resolves(
         self,
     ) -> None:
         """Real corpus data (`01OS`/`01os-0.0.1-py3-none-any.whl`,
         `fastapi`): a single mapper (`parselmouth_relations`) offers two
-        `probability=0.95` candidates for the same PyPI name. Per this
-        function's own docstring, a sole mapper's candidate scoring at
-        least 0.9 should be taken -- but the current implementation only
-        applies that check to non-parselmouth sources, so this defers
-        instead of resolving to the best (here, tied) candidate.
+        `probability=0.95` candidates for the same PyPI name. Resolves to
+        the best (here, tied) candidate.
         """
         candidates = (
             _parselmouth_candidate("fastapi", 0.95),
@@ -767,15 +754,12 @@ class TestAggregatorMapper:
 
         assert result == "fastapi"
 
-    @pytest.mark.xfail(reason=_AGGREGATOR_BUG_REASON, strict=True)
     def test_single_mapper_parselmouth_multiple_candidates_low_probability_noise_resolves_to_winner(
         self,
     ) -> None:
         """Real corpus data (`01memories`/`01memories-0.0.27-py3-none-any.whl`,
-        `pillow`): the same bug, but with four near-zero-probability
-        candidates alongside the one that should win (0.9413 -- comfortably
-        above the 0.9 threshold `aggregator_mapper` would apply to a
-        non-parselmouth mapper in this exact shape).
+        `pillow`): four near-zero-probability candidates alongside the one
+        that should win (0.9413, comfortably above the 0.9 threshold).
         """
         candidates = (
             _parselmouth_candidate("arm_pyart", 0.0086),
@@ -792,11 +776,8 @@ class TestAggregatorMapper:
     def test_single_mapper_parselmouth_multiple_candidates_below_confidence_threshold_defers(
         self,
     ) -> None:
-        """Guards the fix's other edge: a single-mapper parselmouth result
-        with more than one candidate must still defer when the best
-        candidate is below 0.9 -- the bug above is about the threshold not
-        being *applied* to parselmouth, not about parselmouth losing its
-        deferral behavior altogether.
+        """A single-mapper parselmouth result with more than one candidate
+        must still defer when the best candidate is below 0.9.
         """
         candidates = (
             _parselmouth_candidate("levenshtein", 0.5),
@@ -807,15 +788,13 @@ class TestAggregatorMapper:
 
         assert result is candidates
 
-    @pytest.mark.xfail(raises=UnresolvedCondaNameError, reason=_AGGREGATOR_BUG_REASON, strict=True)
-    def test_used_end_to_end_the_fastapi_corpus_failure_reproduces_through_map_name(
+    def test_used_end_to_end_the_fastapi_corpus_case_resolves_through_map_name(
         self,
     ) -> None:
         """The same `fastapi` case as above, but driven through `map_name`
         with a stub contributing mapper -- matching how
         `reroll_data.reroll_index_demo.wheel_to_records` actually calls
-        this chain end to end. Currently raises `UnresolvedCondaNameError`
-        instead of resolving, reproducing the exact error stored for
+        this chain end to end. Reproduces the exact input stored for
         `01OS`/`01os-0.0.1-py3-none-any.whl` in the corpus.
         """
         contributed = (

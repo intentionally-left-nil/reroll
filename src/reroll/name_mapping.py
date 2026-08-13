@@ -86,8 +86,8 @@ def aggregator_mapper(
 
     Decision order: the first grayskull candidate; the first certain
     (probability 1.0) conda-lock candidate; a name proposed by two or more
-    distinct mappers; a sole mapper's candidate scoring at least 0.9, or
-    parselmouth's only candidate. Anything else defers by returning
+    distinct mappers; parselmouth's only candidate; or a sole mapper's best
+    candidate scoring at least 0.9. Anything else defers by returning
     `candidates` unchanged; empty `candidates` falls back to the normalized
     PyPI `name`.
     """
@@ -103,13 +103,11 @@ def aggregator_mapper(
     if winner is not None:
         return winner
     if len({candidate.mapper for candidate in candidates}) == 1:
-        if candidates[0].source is CandidateSource.PARSELMOUTH:
-            if len(candidates) == 1:
-                return candidates[0].conda_name
-        else:
-            best = max(candidates, key=lambda candidate: candidate.probability)
-            if best.probability >= 0.9:
-                return best.conda_name
+        if len(candidates) == 1 and candidates[0].source is CandidateSource.PARSELMOUTH:
+            return candidates[0].conda_name
+        best = max(candidates, key=lambda candidate: candidate.probability)
+        if best.probability >= 0.9:
+            return best.conda_name
     return candidates
 
 

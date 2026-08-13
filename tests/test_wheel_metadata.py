@@ -7,6 +7,12 @@ from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 from pydantic import ValidationError
 
+from reroll.errors import (
+    InvalidMetadataError,
+    InvalidPythonRequirementRangeError,
+    InvalidRequirementError,
+    InvalidVersionSpecifierError,
+)
 from reroll.wheel_metadata import WheelMetadata, parse_metadata
 
 _MINIMAL = "Metadata-Version: 2.1\nName: tinylib\nVersion: 1.2.3\n\n"
@@ -40,7 +46,7 @@ class TestName:
         """A repeated single-value header with genuinely different values
         is ambiguous -- which value is correct? -- so it's rejected.
         """
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidMetadataError):
             parse_metadata(_text("Metadata-Version: 2.1", "Name: foo", "Name: bar", "Version: 1.0"))
 
     def test_duplicate_header_with_identical_value_is_accepted(self) -> None:
@@ -62,7 +68,7 @@ class TestName:
         (PEP 508) grammar `canonicalize_name(validate=True)` enforces --
         e.g. a bare `.` is legal under PEP 345 but not today.
         """
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidMetadataError):
             parse_metadata(_text("Metadata-Version: 1.2", "Name: .", "Version: 1.0"))
 
     def test_constructing_the_model_directly_normalizes_too(self) -> None:
@@ -96,7 +102,7 @@ class TestAmbiguousSingleValueHeaders:
     """
 
     def test_duplicate_license_expression_with_differing_values_is_rejected(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidMetadataError):
             parse_metadata(
                 _text(
                     "Metadata-Version: 2.4",
@@ -121,7 +127,7 @@ class TestAmbiguousSingleValueHeaders:
         assert metadata.license_expression == "MIT"
 
     def test_duplicate_license_with_differing_values_is_rejected(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidMetadataError):
             parse_metadata(
                 _text(
                     "Metadata-Version: 2.1",
@@ -146,7 +152,7 @@ class TestAmbiguousSingleValueHeaders:
         assert metadata.license == "MIT"
 
     def test_duplicate_version_with_differing_values_is_rejected(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidMetadataError):
             parse_metadata(
                 _text(
                     "Metadata-Version: 2.1",
@@ -169,7 +175,7 @@ class TestAmbiguousSingleValueHeaders:
         assert metadata.version == Version("1.0")
 
     def test_duplicate_requires_python_with_differing_values_is_rejected(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidMetadataError):
             parse_metadata(
                 _text(
                     "Metadata-Version: 2.1",
@@ -205,7 +211,7 @@ class TestAmbiguousSingleValueHeaders:
             "Metadata-Version: 2.1\nName: tinylib\nVersion: 1.0\nLicense: Caf\udce9 License\n\n"
         )
 
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidMetadataError):
             parse_metadata(metadata_text)
 
 
@@ -382,7 +388,7 @@ class TestRequiresPython:
         assert metadata.requires_python == ">=3.9"
 
     def test_invalid_specifier_is_rejected(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidVersionSpecifierError):
             parse_metadata(
                 _text(
                     "Metadata-Version: 2.1",
@@ -421,7 +427,7 @@ class TestRequiresPython:
         logic accepts (see `docs/wheel_metadata.md`), so this is rejected
         rather than repaired by a reroll-specific rule.
         """
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidVersionSpecifierError):
             parse_metadata(
                 _text(
                     "Metadata-Version: 2.1",
@@ -435,7 +441,7 @@ class TestRequiresPython:
         """The lenient fixups must not silently accept garbage that merely
         happens to contain digits and operators.
         """
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidVersionSpecifierError):
             parse_metadata(
                 _text(
                     "Metadata-Version: 2.1",
@@ -453,7 +459,7 @@ class TestRequiresPython:
         `Requires-Python` shape reroll doesn't support) rather than
         silently dropped.
         """
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidPythonRequirementRangeError):
             parse_metadata(
                 _text(
                     "Metadata-Version: 2.1",
@@ -464,7 +470,7 @@ class TestRequiresPython:
             )
 
     def test_unsatisfiable_range_is_rejected(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidPythonRequirementRangeError):
             parse_metadata(
                 _text(
                     "Metadata-Version: 2.1",
@@ -516,7 +522,7 @@ class TestRequiresDist:
         assert metadata.requires_dist == ('pywin32>1.0; sys_platform == "win32"',)
 
     def test_invalid_entry_is_rejected(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidRequirementError):
             parse_metadata(
                 _text(
                     "Metadata-Version: 2.1",
@@ -531,7 +537,7 @@ class TestRequiresDist:
         PEP 508's requirement grammar is ASCII-only, so `Requirement()`
         rejects it on its own.
         """
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidRequirementError):
             parse_metadata(
                 _text(
                     "Metadata-Version: 2.1",
@@ -598,7 +604,7 @@ class TestRequiresDist:
         requirement out of an entry that was never fixable in the first
         place.
         """
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidRequirementError):
             parse_metadata(
                 _text(
                     "Metadata-Version: 2.1",
@@ -709,7 +715,7 @@ class TestEncodingChallenges:
         assert metadata.version == Version("1.0")
 
     def test_embedded_null_in_name_is_rejected(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidMetadataError):
             parse_metadata(_text("Metadata-Version: 2.1", "Name: tiny\x00lib", "Version: 1.0"))
 
 

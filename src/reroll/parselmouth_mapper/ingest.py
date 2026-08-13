@@ -11,6 +11,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from reroll.errors import NetworkFetchError
 from reroll.parselmouth_mapper.types import RelationRow
 
 DEFAULT_CHANNEL = "conda-forge"
@@ -53,6 +54,9 @@ def download_relations(
     `False` -- callers must not read `dest` in that case. Any other response
     downloads the body to `dest`, reports `changed=True`, and carries the
     response's own `ETag` (`None` if the server sent none).
+
+    Raises `NetworkFetchError` for any response other than a success or a
+    `304`.
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
     headers = {"User-Agent": "reroll-parselmouth-mapper"}
@@ -67,4 +71,6 @@ def download_relations(
     except urllib.error.HTTPError as error:
         if error.code == 304:
             return DownloadResult(path=dest, changed=False, etag=etag)
-        raise
+        raise NetworkFetchError(f"failed to download {url!r}: {error}") from error
+    except urllib.error.URLError as error:
+        raise NetworkFetchError(f"failed to download {url!r}: {error}") from error

@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import pytest
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict
 
 from reroll.conda_package_name import CondaPackageName, validate_package_name
+from reroll.errors import InvalidCondaNameError
 
 # --------------------------------------------------------------------------
 # `validate_package_name` -- direct
@@ -58,22 +59,22 @@ class TestValidatePackageNameRejects:
         ],
     )
     def test_rejects_invalid_names(self, value: str) -> None:
-        with pytest.raises(ValueError, match="CEP 26"):
+        with pytest.raises(InvalidCondaNameError, match="CEP 26"):
             validate_package_name(value)
 
     def test_rejects_65_characters(self) -> None:
-        with pytest.raises(ValueError, match="65"):
+        with pytest.raises(InvalidCondaNameError, match="65"):
             validate_package_name("a" * 65)
 
     def test_error_names_the_offending_value(self) -> None:
-        with pytest.raises(ValueError, match="Requests"):
+        with pytest.raises(InvalidCondaNameError, match="Requests"):
             validate_package_name("Requests")
 
     def test_does_not_mutate_input(self) -> None:
         """The validator never repairs a value -- lowercasing or otherwise
         fixing a bad name would hide the caller's bug.
         """
-        with pytest.raises(ValueError, match="CEP 26"):
+        with pytest.raises(InvalidCondaNameError, match="CEP 26"):
             validate_package_name("Requests")
 
 
@@ -93,13 +94,13 @@ class TestCondaPackageNameOnModel:
         assert _Model(name="numpy-base").name == "numpy-base"
 
     def test_rejects_invalid_name(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidCondaNameError):
             _Model(name="Requests")
 
     def test_rejects_over_length_name(self) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(InvalidCondaNameError):
             _Model(name="a" * 65)
 
     def test_error_names_the_offending_value(self) -> None:
-        with pytest.raises(ValidationError, match="Requests"):
+        with pytest.raises(InvalidCondaNameError, match="Requests"):
             _Model(name="Requests")

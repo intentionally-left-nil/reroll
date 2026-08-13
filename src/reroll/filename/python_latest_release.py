@@ -14,6 +14,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from reroll.errors import CacheWriteError, NetworkFetchError, UpstreamDataError
+
 DEFAULT_PYTHON_RELEASES_URL = "https://endoflife.date/api/v1/products/python/"
 DEFAULT_CACHE_DIR = Path.home() / ".cache" / "reroll"
 CACHE_FILENAME_PREFIX = "python_version_"
@@ -81,6 +83,10 @@ def _download(url: str, directory: Path) -> Path:
     cache is shared across processes) never observes a partially-written
     file under the final, glob-discoverable name -- only the complete
     response, or nothing at all.
+
+    Raises `NetworkFetchError` if the request itself fails, or
+    `CacheWriteError` if the completed download can't be installed into
+    `directory`.
     """
     timestamp = int(datetime.now(UTC).timestamp())
     dest = directory / f"{CACHE_FILENAME_PREFIX}{timestamp}.json"
@@ -91,10 +97,17 @@ def _download(url: str, directory: Path) -> Path:
     try:
         with urllib.request.urlopen(request) as response:
             staged_path.write_bytes(response.read())
-        staged_path.replace(dest)
+    except OSError as exc:
+        staged_path.unlink(missing_ok=True)
+        raise NetworkFetchError(f"failed to download {url!r}: {exc}") from exc
     except BaseException:
         staged_path.unlink(missing_ok=True)
         raise
+    try:
+        staged_path.replace(dest)
+    except OSError as exc:
+        staged_path.unlink(missing_ok=True)
+        raise CacheWriteError(f"failed to install cache file {dest}: {exc}") from exc
     return dest
 
 
@@ -103,6 +116,8 @@ def _latest_minor_from_releases(data: Any) -> int:
     entries shaped like a bare `"3.<minor>"` (excluding patch-level names
     such as `"3.14.7"`, which only appear under `latest`, and non-3.x majors
     such as `"2.7"`).
+
+    Raises `UpstreamDataError` if `data` carries no such entry at all.
     """
     releases = data["result"]["releases"]
     minors = [
@@ -111,5 +126,5 @@ def _latest_minor_from_releases(data: Any) -> int:
         if (match := _RELEASE_MINOR_RE.match(release["name"])) is not None
     ]
     if not minors:
-        raise ValueError("endoflife.date response contains no 3.x Python release")
+        raise UpstreamDataError("endoflife.date response contains no 3.x Python release")
     return max(minors)

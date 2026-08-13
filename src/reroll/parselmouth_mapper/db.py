@@ -17,6 +17,7 @@ from pathlib import Path
 
 from packaging.utils import NormalizedName, canonicalize_name
 
+from reroll.errors import CacheWriteError, DatabaseError
 from reroll.parselmouth_mapper.ingest import (
     DEFAULT_RELATIONS_URL,
     download_relations,
@@ -37,6 +38,10 @@ def open_parselmouth_database(
     """Open a parselmouth mapping database at `db_path`, rebuilding it from
     `relations_url` only if upstream has changed since it was last built here.
     Returns an open connection to (the possibly just-rebuilt) `db_path`.
+
+    Raises `DatabaseError` if the rebuilt sqlite database itself can't be
+    written, or `CacheWriteError` if the completed rebuild can't be
+    installed at `db_path`.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     previous_etag = _stored_etag(db_path, relations_url)
@@ -49,12 +54,17 @@ def open_parselmouth_database(
             return sqlite3.connect(db_path)
 
         build_path = scratch_path / "relations.sqlite3"
-        build_connection = sqlite3.connect(build_path)
         try:
-            write_relations(build_connection, iter_relations(result.path))
-            _store_etag(build_connection, relations_url, result.etag)
-        finally:
-            build_connection.close()
+            build_connection = sqlite3.connect(build_path)
+            try:
+                write_relations(build_connection, iter_relations(result.path))
+                _store_etag(build_connection, relations_url, result.etag)
+            finally:
+                build_connection.close()
+        except sqlite3.Error as exc:
+            raise DatabaseError(
+                f"failed to build parselmouth database from {relations_url!r}: {exc}"
+            ) from exc
 
         staged_fd, staged_name = tempfile.mkstemp(dir=db_path.parent, prefix=f".{db_path.name}.")
         os.close(staged_fd)
@@ -62,6 +72,11 @@ def open_parselmouth_database(
         try:
             shutil.copy2(build_path, staged_path)
             staged_path.replace(db_path)
+        except OSError as exc:
+            staged_path.unlink(missing_ok=True)
+            raise CacheWriteError(
+                f"failed to install parselmouth database at {db_path}: {exc}"
+            ) from exc
         except BaseException:
             staged_path.unlink(missing_ok=True)
             raise
@@ -222,16 +237,21 @@ def _stored_etag(db_path: Path, url: str) -> str | None:
     """The `ETag` recorded the last time `open_parselmouth_database` built
     `db_path` from `url`. `None` if `db_path` does not exist, or exists but
     was built from a different `url` (e.g. a different channel).
+
+    Raises `DatabaseError` if `db_path` exists but can't be read as sqlite.
     """
     if not db_path.exists():
         return None
-    connection = sqlite3.connect(db_path)
     try:
-        row = connection.execute(
-            "SELECT etag FROM parselmouth_version WHERE url = ?", (url,)
-        ).fetchone()
-    finally:
-        connection.close()
+        connection = sqlite3.connect(db_path)
+        try:
+            row = connection.execute(
+                "SELECT etag FROM parselmouth_version WHERE url = ?", (url,)
+            ).fetchone()
+        finally:
+            connection.close()
+    except sqlite3.Error as exc:
+        raise DatabaseError(f"failed to read parselmouth database at {db_path}: {exc}") from exc
     return None if row is None else row[0]
 
 

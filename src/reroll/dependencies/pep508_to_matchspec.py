@@ -13,9 +13,10 @@ from packaging.version import InvalidVersion, Version
 from rattler import MatchSpec
 from rattler.exceptions import InvalidMatchSpecError
 
-from reroll.dependencies.marker_conversion import marker_condition
+from reroll.dependencies.marker_conversion import UnconvertableMarkerError, marker_condition
 from reroll.dependencies.version_format import format_version
-from reroll.name_mapping import NameMappers, UnresolvedCandidates, map_name
+from reroll.errors import UnconvertableRequirementError
+from reroll.name_mapping import NameMappers, map_name
 
 _MAX_EXTRA_LENGTH = 64
 """CEP-29's `extras` bracket key limits each extra name to 64 characters."""
@@ -30,32 +31,32 @@ def pep508_to_matchspec(
     """The conda MatchSpec for `entry`, a single PEP 508 requirement string
     (a `Requires-Dist` entry).
 
-    Raises `ValueError` for anything that can't be converted: a direct URL
-    reference (`name @ url`); a local version label (`1.0+local`); a
-    pre-release version, unless `allow_pre` is set; an extra name
-    (`name[extra]`) longer than 64 characters once normalized; a PyPI name
-    with no resolvable conda name; a marker referring to `extra` at all
-    (that's a different mechanism -- grouping a dependency into one of the
-    *current* package's own extras -- than an environment marker, and
-    combining it with a real environment condition isn't implemented
-    here); a marker using a construct this function can't convert at all
-    (`in`/`not in`, `platform_machine`, or `!=` against a
-    virtual-package-backed key like `sys_platform`); or an assembled
-    MatchSpec string that fails py-rattler's own validation.
+    Raises `UnconvertableRequirementError` for anything that can't be
+    converted: a direct URL reference (`name @ url`); a local version label
+    (`1.0+local`); a pre-release version, unless `allow_pre` is set; an
+    extra name (`name[extra]`) longer than 64 characters once normalized; a
+    marker referring to `extra` at all (that's a different mechanism --
+    grouping a dependency into one of the *current* package's own extras --
+    than an environment marker, and combining it with a real environment
+    condition isn't implemented here); or an assembled MatchSpec string
+    that fails py-rattler's own validation. Also raises
+    `reroll.errors.UnconvertableMarkerError` for a marker using a construct
+    that has no matchspec equivalent, and
+    `reroll.errors.UnresolvedCondaNameError` for a PyPI name with no
+    resolvable conda name.
     """
     requirement = Requirement(entry)
     marker_node = parse_marker(requirement.marker) if requirement.marker is not None else None
     if marker_node is not None and "extra" in marker_node:
-        raise ValueError(
+        raise UnconvertableRequirementError(
             f"cannot convert {entry!r}: its marker refers to `extra`, which is a "
             "separate per-package-extra mechanism, not an environment condition"
         )
     if requirement.url is not None:
-        raise ValueError(f"cannot convert {entry!r}: it has a direct URL reference")
-    try:
-        conda_name = map_name(requirement.name, mappers)
-    except UnresolvedCandidates as exc:
-        raise ValueError(f"cannot convert {entry!r}: no conda name resolved for it") from exc
+        raise UnconvertableRequirementError(
+            f"cannot convert {entry!r}: it has a direct URL reference"
+        )
+    conda_name = map_name(requirement.name, mappers)
     version_parts = _convert_specifiers(requirement.specifier, entry, allow_pre=allow_pre)
     extras = {canonicalize_name(extra) for extra in requirement.extras}
     if extras:
@@ -76,7 +77,7 @@ def pep508_to_matchspec(
     try:
         MatchSpec(matchspec)
     except InvalidMatchSpecError as exc:
-        raise ValueError(
+        raise UnconvertableRequirementError(
             f"{matchspec!r}, converted from {entry!r}, is not a valid matchspec"
         ) from exc
     return matchspec
@@ -94,8 +95,9 @@ def _convert_specifier(specifier: Specifier, entry: str, *, allow_pre: bool) -> 
     clause -- most contribute a single `<op><version>` clause, but `~=`
     (deprecated per CEP-29) expands into an explicit `>=`/`<` pair.
 
-    Raises `ValueError` if `entry`'s whole conversion must be rejected: a
-    local version label, or a pre-release version with `allow_pre` unset.
+    Raises `UnconvertableRequirementError` if `entry`'s whole conversion
+    must be rejected: a local version label, or a pre-release version with
+    `allow_pre` unset.
     """
     if specifier.operator == "~=":
         return _expand_compatible_release(specifier.version, entry, allow_pre=allow_pre)
@@ -129,18 +131,23 @@ def _expand_compatible_release(raw_version: str, entry: str, *, allow_pre: bool)
 
 def _reject_unsupported_version(version: Version, entry: str, *, allow_pre: bool) -> None:
     if version.local is not None:
-        raise ValueError(f"cannot convert {entry!r}: it has a local version label")
+        raise UnconvertableRequirementError(
+            f"cannot convert {entry!r}: it has a local version label"
+        )
     if version.is_prerelease and not allow_pre:
-        raise ValueError(f"cannot convert {entry!r}: it is a pre-release and allow_pre is unset")
+        raise UnconvertableRequirementError(
+            f"cannot convert {entry!r}: it is a pre-release and allow_pre is unset"
+        )
 
 
 def _reject_invalid_extras(extras: set[NormalizedName], entry: str) -> None:
-    """Raises `ValueError` if any of `extras` -- already normalized via
-    `canonicalize_name` -- exceeds CEP-29's 64-character limit.
+    """Raises `UnconvertableRequirementError` if any of `extras` -- already
+    normalized via `canonicalize_name` -- exceeds CEP-29's 64-character
+    limit.
     """
     for extra in extras:
         if len(extra) > _MAX_EXTRA_LENGTH:
-            raise ValueError(
+            raise UnconvertableRequirementError(
                 f"cannot convert {entry!r}: extra {extra!r} exceeds "
                 f"{_MAX_EXTRA_LENGTH} characters once normalized"
             )
@@ -154,7 +161,15 @@ def _format_extras(extras: set[NormalizedName]) -> str:
 
 
 def _marker_condition(marker_node: Node, entry: str) -> str:
+    """`marker_condition(marker_node)`, with `entry` folded into the
+    message on failure.
+
+    Reraises the same `UnconvertableMarkerError` instance rather than
+    constructing a new one: that error already logged itself at
+    construction, and a fresh instance would log the one failure twice.
+    """
     try:
         return marker_condition(marker_node)
-    except ValueError as exc:
-        raise ValueError(f"cannot convert the marker in {entry!r} to a matchspec: {exc}") from exc
+    except UnconvertableMarkerError as exc:
+        exc.args = (f"cannot convert the marker in {entry!r} to a matchspec: {exc}",)
+        raise

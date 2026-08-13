@@ -6,6 +6,7 @@ from packaging.utils import BuildTag, NormalizedName, canonicalize_name
 from pydantic import BaseModel, ConfigDict, PrivateAttr, field_validator, model_validator
 
 from reroll.conda_package_name import CondaPackageName
+from reroll.errors import InvalidAbiTagError, UnsupportedPlatformError
 from reroll.filename.abi import check_interpreter_abi, normalize_abi, parse_abi
 from reroll.filename.enums import AbiKind, Arch, PlatformFamily
 from reroll.filename.interpreter import parse_interpreter
@@ -73,7 +74,7 @@ class WheelConfig(BaseModel):
         """
         info = parse_abi(value)
         if info.kind is AbiKind.STABLE:
-            raise ValueError(
+            raise InvalidAbiTagError(
                 f"abi3/abi3t must be exploded into concrete per-minor ABIs before "
                 f"constructing a WheelConfig, got {value!r}"
             )
@@ -84,7 +85,7 @@ class WheelConfig(BaseModel):
         check_interpreter_abi(self.interpreter, self.abi)
         info = classify_platform(self.platform)
         if info is None:
-            raise ValueError(f"unsupported platform tag: {self.platform!r}")
+            raise UnsupportedPlatformError(f"unsupported platform tag: {self.platform!r}")
         self._platform_info = info
         self._validate_arch_membership(info)
         return self
@@ -93,9 +94,11 @@ class WheelConfig(BaseModel):
         """`arch` must be in `supported_archs(platform)`."""
         if info.family is PlatformFamily.ANY:
             if self.arch is not None:
-                raise ValueError("arch must be None when platform is 'any'")
+                raise UnsupportedPlatformError("arch must be None when platform is 'any'")
         elif self.arch not in info.archs:
-            raise ValueError(f"arch {self.arch!r} unsupported for platform {self.platform!r}")
+            raise UnsupportedPlatformError(
+                f"arch {self.arch!r} unsupported for platform {self.platform!r}"
+            )
 
     @property
     def python(self) -> PythonRequirement:

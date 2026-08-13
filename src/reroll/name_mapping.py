@@ -11,6 +11,8 @@ from enum import StrEnum
 from packaging.utils import NormalizedName, canonicalize_name
 from pydantic import BaseModel, ConfigDict, Field
 
+from reroll.errors import UnresolvedCondaNameError
+
 
 class CandidateSource(StrEnum):
     """The data source for a candidate selection of a conda name mapping"""
@@ -49,23 +51,6 @@ NameMappers = tuple[NameMapper, *tuple[NameMapper, ...]]
 """
 
 
-class UnresolvedCandidates(Exception):
-    """Raised by `map_name` when every mapper in the chain has run and
-    none of them returned a final conda name
-    """
-
-    def __init__(
-        self,
-        name: str,
-        candidates: Sequence[Candidate] = (),
-    ) -> None:
-        self.name = name
-        self.candidates = tuple(candidates)
-        super().__init__(
-            f"no mapper resolved a conda name for {name!r}: candidates={self.candidates!r}"
-        )
-
-
 def map_name(name: str, mappers: NameMappers) -> str:
     """Resolve `name` to its conda equivalent by threading a growing
     sequence of `Candidate`s through each of `mappers` in order.
@@ -77,7 +62,7 @@ def map_name(name: str, mappers: NameMappers) -> str:
 
     `name` is canonicalized before any mapper sees it
 
-    If every mapper returns candidates, this raises `UnresolvedCandidates`
+    If every mapper returns candidates, this raises `UnresolvedCondaNameError`
     carrying the final candidate sequence
     """
     if not mappers:
@@ -89,7 +74,7 @@ def map_name(name: str, mappers: NameMappers) -> str:
         if isinstance(result, str):
             return result
         candidates = result
-    raise UnresolvedCandidates(normalized, candidates)
+    raise UnresolvedCondaNameError(normalized, candidates)
 
 
 def aggregator_mapper(

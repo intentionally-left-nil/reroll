@@ -9,6 +9,8 @@ from typing import Annotated
 
 from pydantic import AfterValidator
 
+from reroll.errors import InvalidCondaNameError
+
 _MAX_NAME_LENGTH = 64
 
 # Transcribed verbatim from CEP 26 -- the regex, not the CEP's prose, is the
@@ -27,17 +29,17 @@ _DISTRIBUTABLE_NAME_RE = re.compile(r"^(([a-z0-9])|([a-z0-9_](?!_)))[._-]?([a-z0
 def validate_package_name(value: str) -> str:
     """Return `value` unchanged if it is a legal conda package name.
 
-    Raises `ValueError` naming the offender if `value` exceeds
+    Raises `InvalidCondaNameError` naming the offender if `value` exceeds
     `_MAX_NAME_LENGTH` or fails the CEP 26 name regex. Never mutates its
     input: lowercasing or otherwise repairing a bad value would hide the
     caller's bug.
     """
     if len(value) > _MAX_NAME_LENGTH:
-        raise ValueError(
+        raise InvalidCondaNameError(
             f"conda package name {value!r} exceeds {_MAX_NAME_LENGTH} characters ({len(value)})"
         )
     if not _DISTRIBUTABLE_NAME_RE.match(value):
-        raise ValueError(f"{value!r} is not a legal conda package name (CEP 26)")
+        raise InvalidCondaNameError(f"{value!r} is not a legal conda package name (CEP 26)")
     return value
 
 

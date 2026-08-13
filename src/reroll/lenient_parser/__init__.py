@@ -46,7 +46,15 @@ from collections.abc import Callable
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 
+from reroll.errors import (
+    InvalidRequirementError,
+    InvalidVersionSpecifierError,
+    RerollInvalidWheelError,
+)
+
 __all__ = [
+    "InvalidRequirementError",
+    "InvalidVersionSpecifierError",
     "parse_lenient_requirement",
     "parse_lenient_version_specifiers",
 ]
@@ -57,19 +65,23 @@ _logger = logging.getLogger(__name__)
 def parse_lenient_requirement(value: str) -> Requirement:
     """Parses `value` as a PEP 508 requirement, applying uv's `FIXUPS` to
     correct common errors if the strict parse fails. Raises
-    `InvalidRequirement` if `value` cannot be parsed even after every
+    `InvalidRequirementError` if `value` cannot be parsed even after every
     fixup has been tried.
     """
-    return _parse_with_fixups(value, "requirement", Requirement, InvalidRequirement)
+    return _parse_with_fixups(
+        value, "requirement", Requirement, InvalidRequirement, InvalidRequirementError
+    )
 
 
 def parse_lenient_version_specifiers(value: str) -> SpecifierSet:
     """Parses `value` as a PEP 440 version specifier set, applying uv's
     `FIXUPS` to correct common errors if the strict parse fails. Raises
-    `InvalidSpecifier` if `value` cannot be parsed even after every fixup
-    has been tried.
+    `InvalidVersionSpecifierError` if `value` cannot be parsed even after
+    every fixup has been tried.
     """
-    return _parse_with_fixups(value, "version specifier", SpecifierSet, InvalidSpecifier)
+    return _parse_with_fixups(
+        value, "version specifier", SpecifierSet, InvalidSpecifier, InvalidVersionSpecifierError
+    )
 
 
 # Given `>=7.2.0<8.0.0`, rewrite to `>=7.2.0,<8.0.0`.
@@ -113,6 +125,7 @@ def _parse_with_fixups[T](
     type_name: str,
     parse: Callable[[str], T],
     error_type: type[Exception],
+    wrap_error: type[RerollInvalidWheelError],
 ) -> T:
     try:
         return parse(value)
@@ -137,7 +150,7 @@ def _parse_with_fixups[T](
                 patched,
             )
             return result
-        raise err
+        raise wrap_error(f"invalid {type_name} {value!r}: {err}") from err
 
 
 def _remove_stray_quotes(input: str) -> str:

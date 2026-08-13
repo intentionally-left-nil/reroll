@@ -10,12 +10,14 @@ sharp edges (see `reroll.lenient_parser`'s module docstring).
 from __future__ import annotations
 
 import pytest
-from packaging.requirements import InvalidRequirement, Requirement
-from packaging.specifiers import InvalidSpecifier, SpecifierSet
+from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
 
 from reroll.lenient_parser import (
     _MISSING_COMMA_RE,
     _TRAILING_COMMA_RE,
+    InvalidRequirementError,
+    InvalidVersionSpecifierError,
     parse_lenient_requirement,
     parse_lenient_version_specifiers,
 )
@@ -32,7 +34,7 @@ class TestParseLenientRequirement:
         assert actual == Requirement("numpy>=1.19")
 
     def test_unfixable_raises(self) -> None:
-        with pytest.raises(InvalidRequirement):
+        with pytest.raises(InvalidRequirementError):
             parse_lenient_requirement("this is not a requirement @@@")
 
     def test_missing_comma(self) -> None:
@@ -101,7 +103,7 @@ class TestParseLenientVersionSpecifiers:
         assert actual == SpecifierSet(">=1.9")
 
     def test_unfixable_raises(self) -> None:
-        with pytest.raises(InvalidSpecifier):
+        with pytest.raises(InvalidVersionSpecifierError):
             parse_lenient_version_specifiers("@@@ not a specifier @@@")
 
     def test_missing_comma(self) -> None:

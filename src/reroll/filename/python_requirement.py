@@ -5,6 +5,8 @@ from __future__ import annotations
 from packaging.specifiers import SpecifierSet
 from pydantic import BaseModel, ConfigDict
 
+from reroll.errors import InvalidPythonRequirementRangeError
+
 _MINOR_SCAN_CEILING = 100
 """Highest Python 3 minor `minor_range` scans up to. Generous enough that no
 real `Requires-Python` upper bound falls beyond it; a range that's still
@@ -59,14 +61,17 @@ def minor_range(specifiers: SpecifierSet) -> tuple[int, int | None]:
     open-ended upper bound -- so a `PythonRequirement.floor(8).specifier`
     maps to `(8, None)` and a `.pinned(13).specifier` maps to `(13, 14)`.
 
-    Raises `ValueError` if `specifiers` matches no Python 3 minor at all,
-    or a non-contiguous set of them (e.g. `!=3.9.*` carving a hole out of
-    an otherwise-open range) -- no real `Requires-Python` value takes
-    either shape, and neither is representable as a single range.
+    Raises `InvalidPythonRequirementRangeError` if `specifiers` matches no
+    Python 3 minor at all, or a non-contiguous set of them (e.g. `!=3.9.*`
+    carving a hole out of an otherwise-open range) -- no real
+    `Requires-Python` value takes either shape, and neither is
+    representable as a single range.
     """
     satisfied = [m for m in range(_MINOR_SCAN_CEILING) if specifiers.contains(f"3.{m}.0")]
     if not satisfied or satisfied != list(range(satisfied[0], satisfied[-1] + 1)):
-        raise ValueError(f"not a contiguous Python 3.x minor range: {specifiers}")
+        raise InvalidPythonRequirementRangeError(
+            f"not a contiguous Python 3.x minor range: {specifiers}"
+        )
     floor, top = satisfied[0], satisfied[-1]
     ceiling = None if top == _MINOR_SCAN_CEILING - 1 else top + 1
     return floor, ceiling

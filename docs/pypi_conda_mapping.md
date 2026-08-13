@@ -3,11 +3,11 @@ There are no perfect answers for remapping names. The decisions taken are aimed 
 
 * Reroll will allow for a chain of mappings in order to support multiple providers
 * A mapper receives the candidates accumulated by earlier mappers in the chain, and either returns a conda name directly (ending the chain immediately), or returns an array of candidates -- typically the input candidates plus new ones -- for the next mapper to consider
-* If the chain ends without any mapper returning a conda name directly, resolution fails: candidates are never picked automatically. A chain that can end in ambiguity must include a final mapper that commits to one name
+* If the chain ends without any mapper returning a conda name directly, resolution raises `UnresolvedCondaNameError`: candidates are never picked automatically. A chain that can end in ambiguity must include a final mapper that commits to one name
 * Parselmouth will use a sqlite database to manage its entries
 * To avoid Github rate limits, the bulk parselmouth data download will come from https://conda-mapping.prefix.dev
 * The top-level API's will require passing in a mapping
-* Package names larger than 64 characters after re-mapping are rejected
+* Package names larger than 64 characters after re-mapping raise `InvalidCondaNameError`
 
 # Remapping package names from pypi to conda
 Conda (and potentially each different conda channel) and pypi have different names for some python packages. In order to generate repodata, both the package name, and any of its dependencies must be converted to their conda equivalent. This is not an easy problem. There's no centralized registry of mappings, and mappings can be unique per conda-channel (e.g. conda-forge vs main). All of the known mapping tools today have issues, so there will regardless need to be a mechanism for users to provide custom mappings
@@ -85,5 +85,5 @@ A mapper is a function of `(name, candidates) -> name | candidates`:
   * `mapper` -- the name of the specific mapper (function/instance) that added this candidate, distinct from `source`: two different mappers can both draw on the same `source` (e.g. two different heuristics both reading Parselmouth data) and remain distinguishable by `mapper`
 * A mapper with no opinion returns `candidates` unchanged (there is no `None` "pass" sentinel in this design -- returning the input back out *is* passing).
 * A mapper that has settled on one answer returns that name directly as a string, ending the chain immediately -- e.g. a hand-maintained static override table is authoritative by construction, so a hit returns a plain string rather than a `Candidate` with `probability=1.0`.
-* If every mapper in the chain returns candidates (nothing ever collapses to a string), resolution fails: unlike the earlier design, there is no implicit "highest probability wins" tie-break and no fallback to the normalized PyPI name. A chain that can legitimately end ambiguous must end with a decision-making mapper that always commits to one name.
+* If every mapper in the chain returns candidates (nothing ever collapses to a string), resolution raises `UnresolvedCondaNameError`: unlike the earlier design, there is no implicit "highest probability wins" tie-break and no fallback to the normalized PyPI name. A chain that can legitimately end ambiguous must end with a decision-making mapper that always commits to one name.
 * The chain (`mappers`) itself must be non-empty for the same reason: with nobody to ask, there is no name to produce.

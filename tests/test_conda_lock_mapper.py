@@ -24,10 +24,10 @@ from reroll.conda_lock_mapper import (
     candidate_mapper,
     conda_lock_mapper,
 )
+from reroll.errors import ConfigLoadError, UnresolvedCondaNameError
 from reroll.name_mapping import (
     Candidate,
     CandidateSource,
-    UnresolvedCandidates,
     aggregator_mapper,
     map_name,
 )
@@ -462,6 +462,54 @@ class TestCondaLockMapperFromHttp:
         assert sorted(requested) == sorted(by_url)
 
 
+class TestCondaLockMapperLoadFailures:
+    def test_missing_mapping_file_raises_config_load_error(
+        self, tmp_path: Path, local_tables: tuple[Path, Path, Path]
+    ) -> None:
+        _mapping, priority, names = local_tables
+        missing = tmp_path / "does-not-exist.json"
+
+        with pytest.raises(ConfigLoadError):
+            conda_lock_mapper(mapping_url=missing, priority_url=priority, name_mapping_url=names)
+
+    def test_missing_sibling_file_raises_config_load_error(
+        self, tmp_path: Path, local_tables: tuple[Path, Path, Path]
+    ) -> None:
+        mapping, _priority, names = local_tables
+        missing = tmp_path / "does-not-exist.json"
+
+        with pytest.raises(ConfigLoadError):
+            conda_lock_mapper(mapping_url=mapping, priority_url=missing, name_mapping_url=names)
+
+    def test_malformed_json_raises_config_load_error(
+        self, tmp_path: Path, local_tables: tuple[Path, Path, Path]
+    ) -> None:
+        mapping, priority, _names = local_tables
+        malformed_names = tmp_path / "malformed_name_mapping.json"
+        malformed_names.write_text("not valid json {{{")
+
+        with pytest.raises(ConfigLoadError):
+            conda_lock_mapper(
+                mapping_url=mapping, priority_url=priority, name_mapping_url=malformed_names
+            )
+
+    def test_unexpected_shape_raises_config_load_error(
+        self, tmp_path: Path, local_tables: tuple[Path, Path, Path]
+    ) -> None:
+        """Valid JSON, but not shaped like the `MappingEntry`/`PriorityEntry`
+        list this module expects -- a pydantic `ValidationError`, wrapped
+        the same as any other unreadable source.
+        """
+        mapping, priority, _names = local_tables
+        wrong_shape = tmp_path / "wrong_shape_name_mapping.json"
+        wrong_shape.write_text(json.dumps({"not": "a list"}))
+
+        with pytest.raises(ConfigLoadError):
+            conda_lock_mapper(
+                mapping_url=mapping, priority_url=priority, name_mapping_url=wrong_shape
+            )
+
+
 class TestCondaLockMapperCaching:
     def test_repeated_construction_reuses_the_parsed_tables(
         self, local_tables: tuple[Path, Path, Path], monkeypatch: pytest.MonkeyPatch
@@ -545,7 +593,7 @@ class TestCondaLockMapperEndToEnd:
         mapper = conda_lock_mapper(
             mapping_url=mapping, priority_url=priority, name_mapping_url=names
         )
-        with pytest.raises(UnresolvedCandidates) as excinfo:
+        with pytest.raises(UnresolvedCondaNameError) as excinfo:
             map_name("levenshtein", (mapper, aggregator_mapper))
         assert [c.conda_name for c in excinfo.value.candidates] == ["levenshtein"]
 

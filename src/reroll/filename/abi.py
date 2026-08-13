@@ -7,10 +7,17 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from reroll.errors import (
+    InvalidAbiTagError,
+    UnsupportedAbi3FloorError,
+    UnsupportedFreeThreadedVersionError,
+    UnsupportedInterpreterVersionError,
+)
 from reroll.filename.enums import AbiKind
 from reroll.filename.interpreter import parse_interpreter
 
 _ABI_CP_RE = re.compile(r"^cp(\d+)([dmut]*)$")
+
 
 _FREE_THREADED_FLOOR = 13
 """Lowest minor a free-threaded ABI (`cp3XXt`/`abi3t`) may target -- no
@@ -30,7 +37,7 @@ class AbiInfo:
 
 
 def parse_abi(tag: str) -> AbiInfo:
-    """Return the parsed ABI shape. Raises `ValueError` if invalid.
+    """Return the parsed ABI shape.
 
     Accepts `none`; `abi3`/`abi3t`; `cp` + digits with an optional build
     suffix combining `d`/`m`/`u`/`t` in any order. Per
@@ -38,7 +45,8 @@ def parse_abi(tag: str) -> AbiInfo:
     shipped on defaults/conda-forge from 3.4 onward is already a pymalloc,
     wide-unicode build, so `m`/`u` are harmless and `normalize_abi` strips
     them rather than rejecting the wheel. Non-CPython ABIs are rejected by
-    simply not matching any of these forms.
+    simply not matching any of these forms. Raises `InvalidAbiTagError` for
+    any of that.
     """
     if tag == "none":
         return AbiInfo(kind=AbiKind.NONE, minor=None, free_threaded=False)
@@ -47,13 +55,13 @@ def parse_abi(tag: str) -> AbiInfo:
 
     match = _ABI_CP_RE.match(tag)
     if match is None:
-        raise ValueError(f"invalid abi tag: {tag!r}")
+        raise InvalidAbiTagError(f"invalid abi tag: {tag!r}")
     digits, suffix = match.groups()
     major = int(digits[0])
     if major != 3:
-        raise ValueError(f"unsupported abi major version: {tag!r}")
+        raise InvalidAbiTagError(f"unsupported abi major version: {tag!r}")
     if "d" in suffix:
-        raise ValueError(f"debug abi suffix is not supported: {tag!r}")
+        raise InvalidAbiTagError(f"debug abi suffix is not supported: {tag!r}")
     minor = int(digits[1:]) if len(digits) > 1 else 0
     return AbiInfo(kind=AbiKind.VERSIONED, minor=minor, free_threaded="t" in suffix)
 
@@ -74,7 +82,6 @@ def normalize_abi(tag: str) -> str:
 
 def check_interpreter_abi(interpreter: str, abi: str) -> None:
     """Cross-field validation for the legal (interpreter, ABI) pairings.
-    Raises `ValueError` for everything else.
 
     Only six pairing *shapes* are legal: any interpreter with the `none`
     ABI; a `cpXY` interpreter with a `cpXY`/`cpXYt` ABI whose minor matches;
@@ -89,6 +96,12 @@ def check_interpreter_abi(interpreter: str, abi: str) -> None:
     A `cpXYt` versioned ABI additionally requires minor >= 13
     (`_FREE_THREADED_FLOOR`), since no free-threaded CPython build exists
     below that.
+
+    Raises `InvalidAbiTagError` for an illegal pairing *shape*;
+    `UnsupportedInterpreterVersionError` for a `cp` tag (`none` or matching
+    versioned ABI) pinning a minor below 3.4; `UnsupportedFreeThreadedVersionError`
+    for a free-threaded ABI (versioned or `abi3t`) below its own floor; or
+    `UnsupportedAbi3FloorError` for `abi3` below 3.2.
     """
     prefix, _, interp_minor = parse_interpreter(interpreter)
     abi_info = parse_abi(abi)
@@ -97,14 +110,16 @@ def check_interpreter_abi(interpreter: str, abi: str) -> None:
         # Any interpreter tag may pair with the `none` ABI -- but a `cp` tag
         # pins that minor exactly, so it still needs to be >= 3.4 to resolve.
         if prefix == "cp" and interp_minor < 4:
-            raise ValueError(f"CPython < 3.4 is unsupported: {interpreter!r}")
+            raise UnsupportedInterpreterVersionError(
+                f"CPython < 3.4 is unsupported: {interpreter!r}"
+            )
         return
 
     if prefix == "py":
         # A generic interpreter tag never advertises an ABI requirement --
         # no real interpreter emits a `py*` tag paired with anything but
         # `none`.
-        raise ValueError(
+        raise InvalidAbiTagError(
             f"generic interpreter tag {interpreter!r} requires the 'none' ABI, got {abi!r}"
         )
 
@@ -112,11 +127,15 @@ def check_interpreter_abi(interpreter: str, abi: str) -> None:
         # A versioned ABI's minor must match the interpreter's, and (like
         # `none`) pins that minor exactly.
         if abi_info.minor != interp_minor:
-            raise ValueError(f"versioned abi {abi!r} minor must match interpreter {interpreter!r}")
+            raise InvalidAbiTagError(
+                f"versioned abi {abi!r} minor must match interpreter {interpreter!r}"
+            )
         if interp_minor < 4:
-            raise ValueError(f"CPython < 3.4 is unsupported: {interpreter!r}")
+            raise UnsupportedInterpreterVersionError(
+                f"CPython < 3.4 is unsupported: {interpreter!r}"
+            )
         if abi_info.free_threaded and interp_minor < _FREE_THREADED_FLOOR:
-            raise ValueError(
+            raise UnsupportedFreeThreadedVersionError(
                 f"free-threaded CPython < 3.{_FREE_THREADED_FLOOR} is unsupported: {interpreter!r}"
             )
         return
@@ -127,6 +146,8 @@ def check_interpreter_abi(interpreter: str, abi: str) -> None:
     # legal all the way back to 3.2.
     if abi_info.free_threaded:
         if interp_minor < 15:
-            raise ValueError(f"'abi3t' requires CPython >= 3.15, got {interpreter!r}")
+            raise UnsupportedFreeThreadedVersionError(
+                f"'abi3t' requires CPython >= 3.15, got {interpreter!r}"
+            )
     elif interp_minor < 2:
-        raise ValueError(f"'abi3' requires CPython >= 3.2, got {interpreter!r}")
+        raise UnsupportedAbi3FloorError(f"'abi3' requires CPython >= 3.2, got {interpreter!r}")

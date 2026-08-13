@@ -1,7 +1,7 @@
 # Decisions
 Moving from PyPI to conda via reroll is a new codepath, rather than an exact duplication of an existing feature. Therefore, reroll is bound only by the current filename spec and current use cases, not historical practices. The following decisions stem from this framing:
 
-* Filenames must be parseable by packaging.parse_wheel_filename. Any legacy, out of compliance wheel name is ignored
+* Filenames must be parseable by packaging.parse_wheel_filename. Any legacy, out of compliance wheel name raises `InvalidFilenameError`
 * Reroll will only initially support CPython 3.x, not PyPy, GraalPy, or other ABI's. Further ABI support can be added later based on real use cases
 * Reroll will not support Python 2.x wheels (or CPython 2.x)
 * Reroll will not support wheels which require a specific minor version of python less than 3.4
@@ -17,16 +17,16 @@ Moving from PyPI to conda via reroll is a new codepath, rather than an exact dup
   * A Python version paired with that exact CPython ABI e.g.  `cp314-cp314` or `cp314-cp314t`
   * Any CPython version >= 3.2 paired with the `abi3` ABI
   * Any CPython version >= 3.15 paired with the `abi3t` ABI
-* Reroll will not accept build tags with the `d` debug ABI suffix and will  disregard the wheel
+* Reroll will not accept build tags with the `d` debug ABI suffix and will raise `InvalidAbiTagError`
 * Reroll will silently drop the `m` or `u` ABI suffixes since all builds of python on main and conda-forge were built with pymalloc
 * For a wheel with compressed tags, only the tags matching the above decisions will be used, others will be  discarded
-* The filename parsing code for reroll may return zero, one, or multiple configs for a given filename:
-  * If reroll doesn't support the filename due to the above constraints, zero configs will be returned
+* The filename parsing code for reroll may return one or multiple configs for a given filename:
+  * If reroll doesn't support the filename due to the above constraints, the corresponding `RerollScopeError`/`RerollInvalidWheelError`/`RerollUnconvertableError` subclass is raised
   * For many wheels, there will be exactly one matching config, corresponding to one repodata entry for the wheel
   * For some wheels, multiple configs will be returned (which will eventually map to multiple repodata entries). Compressed tag expansion and platform tag expansion are the most common reasons for this. Reroll will prefer resolver correctness and simplicity over repodata terseness by emitting multiple entries to the same wheel
 * The filename code will explode out, and de-duplicate `abi3` and `abi3t` tags to concrete versions of python
 * Reroll will use https://endoflife.date/api/v1/products/python/ to get the upper-bound of python when none is provided
-* A package version may only contain pre-release tags (dev/devN/alpha/beta/rc) if the `allow_pre` setting is true. Otherwise, the version will be rejected, and log file message emitted
+* A package version may only contain pre-release tags (dev/devN/alpha/beta/rc) if the `allow_pre` setting is true. Otherwise, reroll raises `UnsupportedPrereleaseError`
 
 
 # Reading material

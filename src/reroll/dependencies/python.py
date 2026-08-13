@@ -4,10 +4,9 @@ tightened against its `Requires-Python` metadata.
 
 from __future__ import annotations
 
-import logging
-
 from packaging.specifiers import SpecifierSet
 
+from reroll.errors import PythonRangeMismatchError
 from reroll.filename import WheelConfig
 from reroll.filename.python_requirement import minor_range
 from reroll.wheel_metadata import WheelMetadata
@@ -19,17 +18,15 @@ down to this floor; pinning `python` alone is used instead for any minor
 below it (docs/wheel_to_conda_dependencies.md).
 """
 
-_logger = logging.getLogger(__name__)
 
-
-def python_dependencies(config: WheelConfig, metadata: WheelMetadata) -> tuple[str, ...] | None:
+def python_dependencies(config: WheelConfig, metadata: WheelMetadata) -> tuple[str, ...]:
     """The `python` MatchSpec implied by `config`'s wheel tag, tightened
     against `metadata.requires_python` if present, plus a `python_abi`
     MatchSpec for a compiled CPython wheel targeting Python 3.10 or later
     (derived from `config` alone -- `Requires-Python` never affects it).
 
-    `None` if the two ranges don't intersect at all -- the caller should not
-    generate a repodata record for this wheel (a `WARNING` log explains why).
+    Raises `PythonRangeMismatchError` if the two ranges don't intersect at
+    all -- the caller should not generate a repodata record for this wheel.
     """
     requirement = config.python
     filename_floor, filename_ceiling = minor_range(requirement.specifier)
@@ -39,14 +36,11 @@ def python_dependencies(config: WheelConfig, metadata: WheelMetadata) -> tuple[s
         floor = max(floor, meta_floor)
         ceiling = _tighter_ceiling(ceiling, meta_ceiling)
         if ceiling is not None and floor >= ceiling:
-            _logger.warning(
-                "%s: filename-implied python range %s does not intersect "
-                "Requires-Python %r; no depends generated",
-                config.normalized_pypi_name,
-                _python_matchspec(filename_floor, filename_ceiling),
-                metadata.requires_python,
+            raise PythonRangeMismatchError(
+                f"{config.normalized_pypi_name}: filename-implied python range "
+                f"{_python_matchspec(filename_floor, filename_ceiling)} does not intersect "
+                f"Requires-Python {metadata.requires_python!r}; no depends generated"
             )
-            return None
 
     depends = [_python_matchspec(floor, ceiling)]
     if requirement.exact and requirement.minor >= _PYTHON_ABI_FLOOR:

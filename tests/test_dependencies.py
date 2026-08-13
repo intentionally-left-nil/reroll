@@ -7,7 +7,7 @@ import logging
 import pytest
 
 from reroll.dependencies import WheelDependencies, wheel_dependencies
-from reroll.dependencies.extras import extra_marker_entry
+from reroll.dependencies.extras import extra_marker_entry, find_extras
 from reroll.dependencies.python import python_dependencies
 from reroll.dependencies.requires_dist import strip_interpreter_requirements
 from reroll.errors import PythonRangeMismatchError, UnconvertableRequirementError
@@ -318,6 +318,89 @@ class TestExtraMarkerEntry:
         entry = 'fastapi-cli[standard]>=0.0.5; extra == "standard"'
 
         assert extra_marker_entry(entry) == (None, entry)
+
+
+# --------------------------------------------------------------------------
+# `find_extras`: collecting every extra a package declares
+# --------------------------------------------------------------------------
+
+
+class TestFindExtras:
+    def test_no_requires_dist_yields_an_empty_set(self) -> None:
+        assert find_extras(()) == set()
+
+    def test_marker_free_entry_contributes_nothing(self) -> None:
+        assert find_extras(("requests>=2.0.0",)) == set()
+
+    def test_unrelated_marker_contributes_nothing(self) -> None:
+        requires_dist = ('requests>=2.0.0; sys_platform == "win32"',)
+
+        assert find_extras(requires_dist) == set()
+
+    def test_simple_extra_marker_is_found(self) -> None:
+        requires_dist = ('httpx>=0.23.0; extra == "standard"',)
+
+        assert find_extras(requires_dist) == {"standard"}
+
+    def test_reversed_operand_order_is_found(self) -> None:
+        requires_dist = ('httpx>=0.23.0; "standard" == extra',)
+
+        assert find_extras(requires_dist) == {"standard"}
+
+    def test_extra_inequality_is_found(self) -> None:
+        """Unlike `extra_marker_entry` (which only recognizes a bare `==`
+        clause it can strip), `find_extras` just wants every extra name a
+        marker references, regardless of comparator.
+        """
+        requires_dist = ('httpx>=0.23.0; extra != "standard"',)
+
+        assert find_extras(requires_dist) == {"standard"}
+
+    def test_extra_clause_anded_with_another_condition_is_found(self) -> None:
+        requires_dist = ('packageA; python_version < "3.9" and extra == "cli"',)
+
+        assert find_extras(requires_dist) == {"cli"}
+
+    def test_multiple_extra_clauses_ored_together_are_both_found(self) -> None:
+        requires_dist = ('requests>=2.0.0; extra == "foo" or extra == "bar"',)
+
+        assert find_extras(requires_dist) == {"foo", "bar"}
+
+    def test_nested_extra_clauses_are_found(self) -> None:
+        requires_dist = ('packageA; (extra == "foo" or extra == "bar") and python_version < "3.9"',)
+
+        assert find_extras(requires_dist) == {"foo", "bar"}
+
+    def test_extras_are_accumulated_across_entries(self) -> None:
+        requires_dist = (
+            'httpx>=0.23.0; extra == "standard"',
+            'orjson>=3.2.1; extra == "all"',
+        )
+
+        assert find_extras(requires_dist) == {"standard", "all"}
+
+    def test_repeated_extra_across_entries_is_deduplicated(self) -> None:
+        requires_dist = (
+            'httpx>=0.23.0; extra == "standard"',
+            'jinja2>=2.11.2; extra == "standard"',
+        )
+
+        assert find_extras(requires_dist) == {"standard"}
+
+    def test_extra_name_is_normalized(self) -> None:
+        requires_dist = ('httpx>=0.23.0; extra == "Some_Extra.Name"',)
+
+        assert find_extras(requires_dist) == {"some-extra-name"}
+
+    def test_extra_name_over_64_characters_passes_through_unrejected(self) -> None:
+        """PEP 503 places no length limit on a name -- conda's 64-character
+        `extras` bracket limit (docs/matchspec.md#extras-name-normalization)
+        is a later, conda-specific concern, not this function's.
+        """
+        long_name = "a" * 65
+        requires_dist = (f'httpx>=0.23.0; extra == "{long_name}"',)
+
+        assert find_extras(requires_dist) == {long_name}
 
 
 # --------------------------------------------------------------------------

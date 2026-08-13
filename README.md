@@ -41,6 +41,14 @@ metadata = WheelMetadata.model_validate_json(data_json)
 records = get_wheel_records(metadata, filename)
 ```
 
+# PEP to Matchspec helper
+If you ever have a PEP-440 style requirement and want to turn it into a matchspec, `to_matchspec` has you covered. It will convert the string if it can, otherwise an error will be raised if there's no compatible translation to matchspec
+```py
+>>> from reroll import to_matchspec
+>>> to_matchspec('packageA ; python_version < "3.9"')
+'packagea[when="python<3.9.0a0"]'
+```
+
 # Acknowledgements
 I'm so grateful to have learned much about this topic from @jjhelmus. Together we created the original prototype for this concept several years ago, before conda had any support for conditional dependencies, optional dependencies (extras), or .whl support in repodata.json. The reroll codebase in a large sense is just an outgrowth of the original [conda-whl-channel](https://github.com/anaconda/conda-whl-channel) prototype to explore repodata conversion at scale.
 

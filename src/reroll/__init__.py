@@ -8,9 +8,11 @@ step of that pipeline (`extract_metadata_file`, `parse_metadata`,
 
 from __future__ import annotations
 
+from email.policy import default
 from pathlib import Path
 
 from reroll.default_mappers import default_mappers
+from reroll.dependencies.pep508_to_matchspec import pep508_to_matchspec
 from reroll.errors import (
     RerollError,
     RerollInvalidWheelError,
@@ -48,6 +50,7 @@ __all__ = [
     "aggregator_mapper",
     "default_mappers",
     "map_name",
+    "to_matchspec",
     "reroll",
     "static_mapper",
 ]
@@ -87,3 +90,7 @@ def reroll(
         size=size,
         url=url,
     )
+
+def to_matchspec(entry: str, *, mappers: NameMappers | None = None, allow_pre: bool = False) -> str:
+    mappers = mappers or default_mappers()
+    return pep508_to_matchspec(entry, mappers, allow_pre=allow_pre)

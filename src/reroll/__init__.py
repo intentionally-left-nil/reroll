@@ -5,9 +5,8 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
-
 from reroll.default_mappers import default_mappers
+from reroll.dependencies import WheelDependencies
 from reroll.errors import (
     RerollError,
     RerollInvalidWheelError,
@@ -46,17 +45,20 @@ __all__ = [
 ]
 
 
-class WheelRecord(BaseModel):
-    """A single wheel's contribution to a repodata.json `v3.whl` map."""
+class WheelRecord(WheelDependencies):
+    """A single wheel's contribution to a repodata.json `v3.whl` map.
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    Inherits `depends`/`extra_depends` from `WheelDependencies`
+    (`reroll.dependencies`) rather than redeclaring them, so a record's
+    dependency fields are validated identically to the ones
+    `reroll.dependencies.calculate_dependencies` produces.
+    """
 
     name: str
     version: str
     build: str
     build_number: int
     subdir: str
-    depends: tuple[str, ...]
     url: str
     noarch: str | None = None
     license: str | None = None
@@ -75,6 +77,7 @@ def reroll(metadata: str, filename: str) -> tuple[WheelRecord, ...]:
             noarch="python",
             license="MIT",
             depends=("requests >=2.20", "python >=3.9"),
+            extra_depends={},
             url="tinylib-1.2.3-py3-none-any.whl",
         ),
     )

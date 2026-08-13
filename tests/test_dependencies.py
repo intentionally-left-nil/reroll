@@ -391,16 +391,44 @@ class TestWheelDependenciesArchSplit:
 
 
 class TestWheelDependenciesPlatformSpecific:
-    def test_platform_specific_wheel_is_not_yet_implemented(self) -> None:
-        """Converting a wheel whose filename is already platform-specific
-        (not noarch) needs a platform-tag -> `CondaSubdir` mapping that
-        doesn't exist yet (docs/wheel_filename.md's Platform tag section
-        says nothing about this mapping).
-        """
+    def test_platform_specific_wheel_resolves_its_one_subdir(self) -> None:
         config = _config(
             interpreter="cp313", abi="cp313", platform="manylinux_2_17_x86_64", arch=Arch.X86_64
         )
-        metadata = _metadata()
+        metadata = _metadata(requires_dist=("requests>=2.0.0",))
 
-        with pytest.raises(NotImplementedError):
-            wheel_dependencies(config, metadata, (aggregator_mapper,))
+        result = wheel_dependencies(config, metadata, (aggregator_mapper,))
+
+        assert result == {
+            CondaSubdir.LINUX_64: calculate_dependencies(
+                config, metadata, (aggregator_mapper,), subdir=CondaSubdir.LINUX_64
+            )
+        }
+
+    def test_universal2_wheel_resolves_both_macos_subdirs(self) -> None:
+        config = _config(
+            interpreter="cp313", abi="cp313", platform="macosx_10_9_universal2", arch=Arch.X86_64
+        )
+        metadata = _metadata(requires_dist=("requests>=2.0.0",))
+
+        result = wheel_dependencies(config, metadata, (aggregator_mapper,))
+
+        assert set(result) == {CondaSubdir.OSX_64, CondaSubdir.OSX_ARM64}
+        for subdir in result:
+            assert result[subdir] == calculate_dependencies(
+                config, metadata, (aggregator_mapper,), subdir=subdir
+            )
+
+    def test_allow_pre_is_passed_through(self) -> None:
+        config = _config(
+            interpreter="cp313", abi="cp313", platform="manylinux_2_17_x86_64", arch=Arch.X86_64
+        )
+        metadata = _metadata(requires_dist=("requests==1.0.0rc1",))
+
+        result = wheel_dependencies(config, metadata, (aggregator_mapper,), allow_pre=True)
+
+        assert result[CondaSubdir.LINUX_64].depends == (
+            "requests ==1.0.0.rc1",
+            "python >=3.13,<3.14.0a0",
+            "python_abi 3.13.* *_cp313",
+        )

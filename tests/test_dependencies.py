@@ -6,19 +6,26 @@ import logging
 
 import pytest
 
-from reroll.dependencies import WheelDependencies, wheel_dependencies
-from reroll.dependencies.extras import extra_marker_entry, find_extras
+from reroll.dependencies import calculate_dependencies, wheel_dependencies
+from reroll.dependencies.extras import find_extras
 from reroll.dependencies.python import python_dependencies
 from reroll.dependencies.requires_dist import strip_interpreter_requirements
-from reroll.errors import PythonRangeMismatchError, UnconvertableRequirementError
-from reroll.filename import WheelConfig
-from reroll.name_mapping import NameMappers, aggregator_mapper, static_mapper
+from reroll.errors import PythonRangeMismatchError
+from reroll.filename import Arch, WheelConfig
+from reroll.name_mapping import aggregator_mapper
+from reroll.subdir import CondaSubdir
 from reroll.wheel_metadata import WheelMetadata
 
 
-def _config(*, interpreter: str = "py3", abi: str = "none") -> WheelConfig:
-    """A valid `WheelConfig` (py3-none-any) with the interpreter/abi tag
-    overridden for tests that only care about the python/python_abi axis.
+def _config(
+    *,
+    interpreter: str = "py3",
+    abi: str = "none",
+    platform: str = "any",
+    arch: Arch | None = None,
+) -> WheelConfig:
+    """A valid `WheelConfig` (py3-none-any) with the interpreter/abi/platform/arch
+    tags overridden for tests that only care about one axis at a time.
     """
     return WheelConfig(
         normalized_pypi_name="tinylib",
@@ -27,8 +34,8 @@ def _config(*, interpreter: str = "py3", abi: str = "none") -> WheelConfig:
         build=(),
         interpreter=interpreter,
         abi=abi,
-        platform="any",
-        arch=None,
+        platform=platform,
+        arch=arch,
     )
 
 
@@ -46,16 +53,6 @@ def _metadata(
         requires_python=requires_python,
         requires_dist=requires_dist,
     )
-
-
-def _dependencies(
-    config: WheelConfig,
-    metadata: WheelMetadata,
-    mappers: NameMappers,
-    *,
-    allow_pre: bool = False,
-) -> WheelDependencies:
-    return wheel_dependencies(config, metadata, mappers, allow_pre=allow_pre)
 
 
 # --------------------------------------------------------------------------
@@ -256,71 +253,6 @@ class TestStripInterpreterRequirements:
 
 
 # --------------------------------------------------------------------------
-# `extra_marker_entry`: recognizing a bare per-extra marker
-# --------------------------------------------------------------------------
-
-
-class TestExtraMarkerEntry:
-    def test_marker_free_entry_is_unchanged(self) -> None:
-        assert extra_marker_entry("requests>=2.0.0") == (None, "requests>=2.0.0")
-
-    def test_unrelated_marker_is_unchanged(self) -> None:
-        entry = 'requests>=2.0.0; sys_platform == "win32"'
-
-        assert extra_marker_entry(entry) == (None, entry)
-
-    def test_simple_extra_marker_extracts_name_and_strips_marker(self) -> None:
-        entry = 'httpx>=0.23.0; extra == "standard"'
-
-        assert extra_marker_entry(entry) == ("standard", "httpx>=0.23.0")
-
-    def test_reversed_operand_order_is_recognized(self) -> None:
-        entry = 'httpx>=0.23.0; "standard" == extra'
-
-        assert extra_marker_entry(entry) == ("standard", "httpx>=0.23.0")
-
-    def test_bare_name_with_extra_marker_strips_to_bare_name(self) -> None:
-        entry = 'jinja2; extra == "standard"'
-
-        assert extra_marker_entry(entry) == ("standard", "jinja2")
-
-    def test_extra_name_is_normalized(self) -> None:
-        entry = 'httpx>=0.23.0; extra == "Some_Extra.Name"'
-
-        assert extra_marker_entry(entry) == ("some-extra-name", "httpx>=0.23.0")
-
-    def test_extra_inequality_is_not_a_bare_extra_marker(self) -> None:
-        entry = 'httpx>=0.23.0; extra != "standard"'
-
-        assert extra_marker_entry(entry) == (None, entry)
-
-    def test_conditional_extra_marker_is_not_a_bare_extra_marker(self) -> None:
-        """Per docs/wheel_to_conda_dependencies.md, a marker combining more
-        than one `extra ==` clause is out of scope for this diff.
-        """
-        entry = 'requests>=2.0.0; extra == "foo" or extra == "bar"'
-
-        assert extra_marker_entry(entry) == (None, entry)
-
-    def test_extra_marker_anded_with_another_condition_is_not_a_bare_extra_marker(self) -> None:
-        entry = 'requests>=2.0.0; extra == "foo" and python_version >= "3.8"'
-
-        assert extra_marker_entry(entry) == (None, entry)
-
-    def test_entry_with_its_own_extras_is_not_a_bare_extra_marker(self) -> None:
-        """A `Requires-Dist` entry can carry both a per-extra marker *and*
-        its own extras selector, e.g. FastAPI's
-        `fastapi-cli[standard] (>=0.0.5) ; extra == "standard"` -- this
-        function only strips a marker-free bare `extra` clause, so the
-        entry's own extras leave it unrecognized here regardless of how
-        the remaining `fastapi-cli[standard]` converts downstream.
-        """
-        entry = 'fastapi-cli[standard]>=0.0.5; extra == "standard"'
-
-        assert extra_marker_entry(entry) == (None, entry)
-
-
-# --------------------------------------------------------------------------
 # `find_extras`: collecting every extra a package declares
 # --------------------------------------------------------------------------
 
@@ -404,201 +336,71 @@ class TestFindExtras:
 
 
 # --------------------------------------------------------------------------
-# `wheel_dependencies`: package entrypoint
+# `wheel_dependencies`: package entrypoint -- noarch vs. arch-split retry
 # --------------------------------------------------------------------------
 
 
-class TestWheelDependencies:
-    def test_delegates_to_python_dependencies_when_requires_dist_is_empty(self) -> None:
-        config = _config(interpreter="cp313", abi="cp313")
-        metadata = _metadata()
+class TestWheelDependenciesNoarch:
+    def test_noarch_wheel_returns_a_single_none_keyed_result(self) -> None:
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(requires_dist=("requests>=2.0.0",))
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = wheel_dependencies(config, metadata, (aggregator_mapper,))
 
-        assert result.depends == python_dependencies(config, metadata)
-        assert result.extra_depends == {}
+        assert result == {
+            None: calculate_dependencies(config, metadata, (aggregator_mapper,), subdir=None)
+        }
 
-    def test_delegates_unsolvable_result(self) -> None:
+    def test_allow_pre_is_passed_through(self) -> None:
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(requires_dist=("requests==1.0.0rc1",))
+
+        result = wheel_dependencies(config, metadata, (aggregator_mapper,), allow_pre=True)
+
+        assert result[None].depends == ("requests ==1.0.0.rc1", "python >=3.0")
+
+    def test_unsolvable_python_range_raises(self) -> None:
         config = _config(interpreter="cp39", abi="cp39")
         metadata = _metadata(requires_python=">=3.10")
 
         with pytest.raises(PythonRangeMismatchError):
             wheel_dependencies(config, metadata, (aggregator_mapper,))
 
-    def test_simple_requires_dist_entries_come_before_python(self) -> None:
-        """Matches the field order real conda-pypi output uses (§3.5 of
-        `specs/wheel_dependency_conversion.md`): dependency entries first,
-        `python` last.
-        """
+
+class TestWheelDependenciesArchSplit:
+    def test_arch_specific_marker_emits_one_result_per_subdir(self) -> None:
         config = _config(interpreter="py3", abi="none")
-        metadata = _metadata(requires_dist=("requests>=2.0.0",))
+        metadata = _metadata(requires_dist=('requests>=2.0.0; platform_machine == "x86_64"',))
 
-        assert _dependencies(config, metadata, (aggregator_mapper,)).depends == (
-            "requests >=2.0.0",
-            "python >=3.0",
-        )
+        result = wheel_dependencies(config, metadata, (aggregator_mapper,))
 
-    def test_multiple_requires_dist_entries_keep_their_order(self) -> None:
-        config = _config(interpreter="py3", abi="none")
-        metadata = _metadata(requires_dist=("requests>=2.0.0", "click==8.*"))
-
-        assert _dependencies(config, metadata, (aggregator_mapper,)).depends == (
-            "requests >=2.0.0",
-            "click =8",
-            "python >=3.0",
-        )
-
-    def test_strips_bare_interpreter_requirements_before_conversion(self) -> None:
-        config = _config(interpreter="py3", abi="none")
-        metadata = _metadata(requires_dist=("python>=3.9", "requests>=2.0.0"))
-
-        assert _dependencies(config, metadata, (aggregator_mapper,)).depends == (
-            "requests >=2.0.0",
-            "python >=3.0",
-        )
-
-    def test_converts_an_entry_with_its_own_extras(self) -> None:
-        config = _config(interpreter="py3", abi="none")
-        metadata = _metadata(requires_dist=("requests[security]>=2.0.0",))
-
-        assert _dependencies(config, metadata, (aggregator_mapper,)).depends == (
-            "requests >=2.0.0[extras=[security]]",
-            "python >=3.0",
-        )
-
-    def test_converts_an_entry_with_an_environment_marker(self) -> None:
-        config = _config(interpreter="py3", abi="none")
-        metadata = _metadata(requires_dist=('requests>=2.0.0; sys_platform == "win32"',))
-
-        assert _dependencies(config, metadata, (aggregator_mapper,)).depends == (
-            'requests >=2.0.0[when="__win"]',
-            "python >=3.0",
-        )
-
-    def test_marker_combining_extra_clauses_raises(self) -> None:
-        """Per docs/wheel_to_conda_dependencies.md, a marker combining more
-        than one `extra ==` clause is a separate mechanism (grouping a
-        dependency into one of the current package's own extras) than an
-        environment marker, and combining the two isn't implemented.
-        """
-        config = _config(interpreter="py3", abi="none")
-        metadata = _metadata(requires_dist=('requests>=2.0.0; extra == "foo" or extra == "bar"',))
-
-        with pytest.raises(UnconvertableRequirementError, match="extra"):
-            wheel_dependencies(config, metadata, (aggregator_mapper,))
-
-    def test_rejects_the_whole_record_for_an_unrepresentable_entry(self) -> None:
-        config = _config(interpreter="py3", abi="none")
-        metadata = _metadata(requires_dist=("requests==1.0.0+local",))
-
-        with pytest.raises(UnconvertableRequirementError, match="local version label"):
-            wheel_dependencies(config, metadata, (aggregator_mapper,))
-
-    def test_uses_mappers_to_convert_dependency_names(self) -> None:
-        config = _config(interpreter="py3", abi="none")
-        metadata = _metadata(requires_dist=("requests>=2.0.0",))
-        mappers = (static_mapper({"requests": "python-requests"}), aggregator_mapper)
-
-        assert _dependencies(config, metadata, mappers).depends == (
-            "python-requests >=2.0.0",
-            "python >=3.0",
-        )
-
-    def test_allow_pre_is_passed_through_to_requires_dist_conversion(self) -> None:
-        config = _config(interpreter="py3", abi="none")
-        metadata = _metadata(requires_dist=("requests==1.0.0rc1",))
-
-        result = _dependencies(config, metadata, (aggregator_mapper,), allow_pre=True)
-
-        assert result.depends == (
-            "requests ==1.0.0.rc1",
-            "python >=3.0",
-        )
-
-
-# --------------------------------------------------------------------------
-# `wheel_dependencies`: grouping per-extra `Requires-Dist` entries
-# --------------------------------------------------------------------------
-
-
-class TestWheelDependenciesExtras:
-    def test_extra_only_dependency_is_grouped_by_extra_name(self) -> None:
-        config = _config(interpreter="py3", abi="none")
-        metadata = _metadata(requires_dist=('httpx>=0.23.0; extra == "standard"',))
-
-        result = _dependencies(config, metadata, (aggregator_mapper,))
-
-        assert result.depends == ("python >=3.0",)
-        assert result.extra_depends == {"standard": ("httpx >=0.23.0",)}
-
-    def test_multiple_entries_for_the_same_extra_are_grouped_together(self) -> None:
-        config = _config(interpreter="py3", abi="none")
-        metadata = _metadata(
-            requires_dist=(
-                'httpx>=0.23.0; extra == "standard"',
-                'jinja2>=2.11.2; extra == "standard"',
+        assert set(result) == set(CondaSubdir)
+        for subdir in CondaSubdir:
+            assert result[subdir] == calculate_dependencies(
+                config, metadata, (aggregator_mapper,), subdir=subdir
             )
+
+    def test_linux_64_resolves_the_matching_arch_marker(self) -> None:
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(requires_dist=('requests>=2.0.0; platform_machine == "x86_64"',))
+
+        result = wheel_dependencies(config, metadata, (aggregator_mapper,))
+
+        assert result[CondaSubdir.LINUX_64].depends == ("requests >=2.0.0", "python >=3.0")
+        assert result[CondaSubdir.LINUX_AARCH64].depends == ("python >=3.0",)
+
+
+class TestWheelDependenciesPlatformSpecific:
+    def test_platform_specific_wheel_is_not_yet_implemented(self) -> None:
+        """Converting a wheel whose filename is already platform-specific
+        (not noarch) needs a platform-tag -> `CondaSubdir` mapping that
+        doesn't exist yet (docs/wheel_filename.md's Platform tag section
+        says nothing about this mapping).
+        """
+        config = _config(
+            interpreter="cp313", abi="cp313", platform="manylinux_2_17_x86_64", arch=Arch.X86_64
         )
+        metadata = _metadata()
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
-
-        assert result.extra_depends == {
-            "standard": ("httpx >=0.23.0", "jinja2 >=2.11.2"),
-        }
-
-    def test_multiple_extras_produce_separate_keys(self) -> None:
-        config = _config(interpreter="py3", abi="none")
-        metadata = _metadata(
-            requires_dist=(
-                'httpx>=0.23.0; extra == "standard"',
-                'orjson>=3.2.1; extra == "all"',
-            )
-        )
-
-        result = _dependencies(config, metadata, (aggregator_mapper,))
-
-        assert result.extra_depends == {
-            "standard": ("httpx >=0.23.0",),
-            "all": ("orjson >=3.2.1",),
-        }
-
-    def test_extra_name_is_normalized(self) -> None:
-        config = _config(interpreter="py3", abi="none")
-        metadata = _metadata(requires_dist=('httpx>=0.23.0; extra == "Some_Extra.Name"',))
-
-        result = _dependencies(config, metadata, (aggregator_mapper,))
-
-        assert result.extra_depends == {"some-extra-name": ("httpx >=0.23.0",)}
-
-    def test_extra_dependencies_are_not_duplicated_into_the_base_depends(self) -> None:
-        config = _config(interpreter="py3", abi="none")
-        metadata = _metadata(
-            requires_dist=("requests>=2.0.0", 'httpx>=0.23.0; extra == "standard"')
-        )
-
-        result = _dependencies(config, metadata, (aggregator_mapper,))
-
-        assert result.depends == ("requests >=2.0.0", "python >=3.0")
-        assert result.extra_depends == {"standard": ("httpx >=0.23.0",)}
-
-    def test_no_extra_entries_yields_an_empty_extra_depends(self) -> None:
-        config = _config(interpreter="py3", abi="none")
-        metadata = _metadata(requires_dist=("requests>=2.0.0",))
-
-        assert _dependencies(config, metadata, (aggregator_mapper,)).extra_depends == {}
-
-    def test_extra_dependency_uses_mappers_to_convert_its_name(self) -> None:
-        config = _config(interpreter="py3", abi="none")
-        metadata = _metadata(requires_dist=('requests>=2.0.0; extra == "standard"',))
-        mappers = (static_mapper({"requests": "python-requests"}), aggregator_mapper)
-
-        result = _dependencies(config, metadata, mappers)
-
-        assert result.extra_depends == {"standard": ("python-requests >=2.0.0",)}
-
-    def test_unrepresentable_extra_dependency_rejects_the_whole_record(self) -> None:
-        config = _config(interpreter="py3", abi="none")
-        metadata = _metadata(requires_dist=('requests==1.0.0+local; extra == "standard"',))
-
-        with pytest.raises(UnconvertableRequirementError, match="local version label"):
+        with pytest.raises(NotImplementedError):
             wheel_dependencies(config, metadata, (aggregator_mapper,))

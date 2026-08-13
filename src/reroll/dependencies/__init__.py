@@ -6,8 +6,8 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-from reroll.dependencies.convert_dependency import Unsupported, convert_dependency
 from reroll.dependencies.extras import extra_marker_entry
+from reroll.dependencies.pep508_to_matchspec import pep508_to_matchspec
 from reroll.dependencies.python import python_dependencies
 from reroll.dependencies.requires_dist import strip_interpreter_requirements
 from reroll.filename import WheelConfig
@@ -50,17 +50,16 @@ def wheel_dependencies(
     contributes to it, in declaration order.
 
     `None` if `config`'s filename-implied Python range and
-    `metadata.requires_python` don't intersect, or if a `Requires-Dist`
-    entry this function does convert turns out to be unrepresentable in
-    conda (`reroll.dependencies.convert_dependency.convert_dependency`) --
-    either way, the caller should not generate a repodata record for this
-    wheel.
+    `metadata.requires_python` don't intersect -- the caller should not
+    generate a repodata record for this wheel.
 
-    A `Requires-Dist` entry with extras of its own, or a marker other than
-    a bare `extra == "name"` clause, is left out of both `depends` and
-    `extra_depends` entirely for now rather than converted or rejected:
-    conditional dependencies and extras-on-a-dependency conversion are a
-    future addition, not yet implemented.
+    Raises `ValueError` if a `Requires-Dist` entry turns out to be
+    unrepresentable in conda
+    (`reroll.dependencies.pep508_to_matchspec.pep508_to_matchspec`), which
+    includes a marker mixing an `extra == "name"` clause with anything
+    else -- that combination is a separate mechanism (grouping a
+    dependency into one of the *current* package's own extras) than an
+    environment marker, and isn't implemented here.
     """
     python_deps = python_dependencies(config, metadata)
     if python_deps is None:
@@ -69,11 +68,7 @@ def wheel_dependencies(
     extra_depends: dict[str, list[str]] = {}
     for entry in strip_interpreter_requirements(metadata.requires_dist):
         extra_name, converted_entry = extra_marker_entry(entry)
-        result = convert_dependency(converted_entry, mappers, allow_pre=allow_pre)
-        if isinstance(result, Unsupported):
-            continue
-        if result is None:
-            return None
+        result = pep508_to_matchspec(converted_entry, mappers, allow_pre=allow_pre)
         if extra_name is None:
             depends.append(result)
         else:

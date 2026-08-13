@@ -19,17 +19,17 @@ below it (docs/wheel_to_conda_dependencies.md).
 """
 
 
-def python_dependencies(config: WheelConfig, metadata: WheelMetadata) -> tuple[str, ...]:
-    """The `python` MatchSpec implied by `config`'s wheel tag, tightened
-    against `metadata.requires_python` if present, plus a `python_abi`
-    MatchSpec for a compiled CPython wheel targeting Python 3.10 or later
-    (derived from `config` alone -- `Requires-Python` never affects it).
+def python_range(config: WheelConfig, metadata: WheelMetadata) -> tuple[int, int | None]:
+    """The `(floor, ceiling)` Python 3 minor range implied by `config`'s
+    wheel tag, tightened against `metadata.requires_python` if present --
+    the shape `reroll.filename.python_requirement.minor_range` returns,
+    and the same shape `reroll.dependencies.conditional_dependency`'s
+    `python_version` parameter expects.
 
     Raises `PythonRangeMismatchError` if the two ranges don't intersect at
     all -- the caller should not generate a repodata record for this wheel.
     """
-    requirement = config.python
-    filename_floor, filename_ceiling = minor_range(requirement.specifier)
+    filename_floor, filename_ceiling = minor_range(config.python.specifier)
     floor, ceiling = filename_floor, filename_ceiling
     if metadata.requires_python is not None:
         meta_floor, meta_ceiling = minor_range(SpecifierSet(metadata.requires_python))
@@ -41,7 +41,19 @@ def python_dependencies(config: WheelConfig, metadata: WheelMetadata) -> tuple[s
                 f"{_python_matchspec(filename_floor, filename_ceiling)} does not intersect "
                 f"Requires-Python {metadata.requires_python!r}; no depends generated"
             )
+    return floor, ceiling
 
+
+def python_dependencies(config: WheelConfig, metadata: WheelMetadata) -> tuple[str, ...]:
+    """The `python` MatchSpec implied by `python_range(config, metadata)`,
+    plus a `python_abi` MatchSpec for a compiled CPython wheel targeting
+    Python 3.10 or later (derived from `config` alone -- `Requires-Python`
+    never affects it).
+
+    Raises `PythonRangeMismatchError`, per `python_range`.
+    """
+    requirement = config.python
+    floor, ceiling = python_range(config, metadata)
     depends = [_python_matchspec(floor, ceiling)]
     if requirement.exact and requirement.minor >= _PYTHON_ABI_FLOOR:
         depends.append(_python_abi_matchspec(requirement.minor, free_threaded=config.free_threaded))

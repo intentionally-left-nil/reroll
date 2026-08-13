@@ -822,6 +822,28 @@ wheels = [
 ]
 
 [[package]]
+name = "py-rattler"
+version = "0.25.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5f/10/64e7f7e44381b102d48c5ed32771304b31d7549f56f604ba7e108a580293/py_rattler-0.25.0.tar.gz", hash = "sha256:62d282870d08404898cec16da39f6085964117d19ee2f6d4a15f3ae19bd07860", size = 1393618, upload-time = "2026-06-09T14:57:33.884Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/95/77/85022634184189df3c12443dee81945e95302040fdcf227e959ea76a0127/py_rattler-0.25.0-cp38-abi3-macosx_10_12_x86_64.macosx_11_0_arm64.macosx_10_12_universal2.whl", hash = "sha256:473cc070b0e66d6940c43859657ce244636671b1980fa8fe15224139d4f6a8b9", size = 36122153, upload-time = "2026-06-09T14:56:50.38Z" },
+    { url = "https://files.pythonhosted.org/packages/4a/c5/d58a7923cb13e9d85bf73cd1b1445e2adb20ec653a1ffb058d181d67cf86/py_rattler-0.25.0-cp38-abi3-macosx_10_12_x86_64.whl", hash = "sha256:38c3d3c235c530589fdfbe114a5d00637591cfc42843329a3373976b6f358ccc", size = 18689533, upload-time = "2026-06-09T14:56:58.148Z" },
+    { url = "https://files.pythonhosted.org/packages/88/f4/7ff4c047b1972be5470c2b68893ab9390bdc65dbca4868dea64eb8b360f5/py_rattler-0.25.0-cp38-abi3-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:85e39effddec7c77c46ecaaec0bc186d871a74e6fbd62369517525c505526c97", size = 21690460, upload-time = "2026-06-09T14:57:00.72Z" },
+    { url = "https://files.pythonhosted.org/packages/21/dc/b8bb73356694bd10e5f9fae8880e6c7069b891ed5346b74dbdc9bcb1efa0/py_rattler-0.25.0-cp38-abi3-manylinux_2_17_ppc64.manylinux2014_ppc64.whl", hash = "sha256:6c93630393fbc49156e37e66a07c93c3776d1f93d00ba028a446bdc4195c96a2", size = 28223852, upload-time = "2026-06-09T14:57:03.566Z" },
+    { url = "https://files.pythonhosted.org/packages/97/c4/bc6eac7312078988f528c54b0a576117a9ec57822c8ac817af822e5dff6b/py_rattler-0.25.0-cp38-abi3-manylinux_2_17_ppc64le.manylinux2014_ppc64le.whl", hash = "sha256:3d704df01d1fb90df54e7416329f90975fda36a5a22558f88fbdb05462e6e0d9", size = 27095478, upload-time = "2026-06-09T14:57:06.606Z" },
+    { url = "https://files.pythonhosted.org/packages/70/2a/a418ff2229f468e3f40cfe2d89c61eeb31ed49d4e83a28e00ea8909ec6fd/py_rattler-0.25.0-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:b642304155f492c7dd3eb772df5e8e97942bff445ab8e343dc7a173e3efbfcf1", size = 20200996, upload-time = "2026-06-09T14:57:09.833Z" },
+    { url = "https://files.pythonhosted.org/packages/18/4f/73d8db331e699e8f721c52ea0398bfb9794b3bb28d5cf22c5460b58230d4/py_rattler-0.25.0-cp38-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:4520a66fa8d27d07e544275f76a3eef04e58ba83c37e505f6c2a5511837480ff", size = 20275699, upload-time = "2026-06-09T14:57:12.652Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/4b/fa8f8bb0f7094d984e757622559165b663e37b70fdbac9c3e538e136878b/py_rattler-0.25.0-cp38-abi3-manylinux_2_28_armv7l.whl", hash = "sha256:64aad8d658c3ccd4aa2a018c9f8057432ee4e833f42dbe9f0043b76a6bb850eb", size = 19465077, upload-time = "2026-06-09T14:57:15.136Z" },
+    { url = "https://files.pythonhosted.org/packages/36/75/089c0e6af21872015f373e7adefc87dca0e4a0e02c0c7cd12c0b6e093a9a/py_rattler-0.25.0-cp38-abi3-musllinux_1_2_aarch64.whl", hash = "sha256:a8cf0da4bbfcafcf4c073eea8b9dd19592ff0e9917f34ed88aa8099f213cf31f", size = 20500770, upload-time = "2026-06-09T14:57:17.612Z" },
+    { url = "https://files.pythonhosted.org/packages/6e/2b/29ba4d031c697cd077591fe54ff93c9efb36d41584a6d8d7ce9eb00a775e/py_rattler-0.25.0-cp38-abi3-musllinux_1_2_armv7l.whl", hash = "sha256:57ec195533e36f518f9676eee1de75ba474ac6076e92c6a8c0c00bba4708aead", size = 19655283, upload-time = "2026-06-09T14:57:20.184Z" },
+    { url = "https://files.pythonhosted.org/packages/d5/e9/46709db59f2f3648ab228f33921bd232072cb44c2f2abdb5cf279c6a1aa2/py_rattler-0.25.0-cp38-abi3-musllinux_1_2_i686.whl", hash = "sha256:ff6acae962a21f5f91b44fd31125967b23b152ab06dd9fb30d7c5076d1ed851d", size = 23120706, upload-time = "2026-06-09T14:57:23.064Z" },
+    { url = "https://files.pythonhosted.org/packages/24/4f/aca22c9242f039f7a0147b50951a32ee31f8f881aab7a9480ad0220c2bf8/py_rattler-0.25.0-cp38-abi3-musllinux_1_2_x86_64.whl", hash = "sha256:58dfdfb6d9613979f66f261dc9081afc7e141c90f0f963bf7e2240cfe54727b2", size = 20859284, upload-time = "2026-06-09T14:57:25.9Z" },
+    { url = "https://files.pythonhosted.org/packages/29/47/54cb11719e04a1cb67e3a42524a774cadc72cae0ab07cb178f357eb0a2c1/py_rattler-0.25.0-cp38-abi3-win32.whl", hash = "sha256:c5446c503738fc2c8db3532eaeae181b1858c88c1f822696246011b32a67b798", size = 14670734, upload-time = "2026-06-09T14:57:28.664Z" },
+    { url = "https://files.pythonhosted.org/packages/4c/9f/d38f9dcd3b2b38de65e17d3cfba6e6c8a672b90e0a76adde5fa357f1c27a/py_rattler-0.25.0-cp38-abi3-win_amd64.whl", hash = "sha256:81a05608c0efe44652af7395fed9cf398506bd1a67fc5636fa5aaa94cf4f78ac", size = 16623658, upload-time = "2026-06-09T14:57:31.314Z" },
+]
+
+[[package]]
 name = "pycparser"
 version = "3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1094,6 +1116,7 @@ dependencies = [
     { name = "grayskull" },
     { name = "markerpry" },
     { name = "packaging" },
+    { name = "py-rattler" },
     { name = "pydantic" },
 ]
 
@@ -1112,6 +1135,7 @@ requires-dist = [
     { name = "grayskull", specifier = ">=3.1.1" },
     { name = "markerpry", specifier = ">=0.5.0" },
     { name = "packaging", specifier = ">=26.1" },
+    { name = "py-rattler", specifier = ">=0.25.0" },
     { name = "pydantic", specifier = ">=2.13.4" },
 ]
 

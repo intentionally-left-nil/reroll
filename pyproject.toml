@@ -1,5 +1,5 @@
 [project]
-name = "reroll"
+name = "py-reroll"
 version = "0.1.0"
 description = "Generate v3 repodata from a wheel's METADATA file"
 readme = "README.md"
@@ -19,6 +19,9 @@ dependencies = [
 [build-system]
 requires = ["uv_build>=0.12.0,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "reroll"
 
 # Dev-only dependencies (PEP 735). Kept out of [project.dependencies] so the
 # published package never pulls in test/lint/type-check tooling.

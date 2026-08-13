@@ -16,8 +16,13 @@ from pathlib import Path
 import pytest
 from packaging.utils import canonicalize_name
 
-from reroll.errors import CacheWriteError, DatabaseError, NetworkFetchError
-from reroll.name_mapping import Candidate, CandidateSource
+from reroll.errors import (
+    CacheWriteError,
+    DatabaseError,
+    NetworkFetchError,
+    UnresolvedCondaNameError,
+)
+from reroll.name_mapping import Candidate, CandidateSource, aggregator_mapper, map_name
 from reroll.parselmouth_mapper import (
     BASE_PROBABILITY,
     DEFAULT_CHANNEL,
@@ -1441,3 +1446,89 @@ class TestParselmouthAgainstRealData:
         second = download_relations(DEFAULT_RELATIONS_URL, dest=dest, etag=first.etag)
         assert second.changed is False
         assert second.etag == first.etag
+
+
+# --------------------------------------------------------------------------
+# `aggregator_mapper` fed by real published data (network) -- integration
+# --------------------------------------------------------------------------
+
+_AGGREGATOR_PARSELMOUTH_THRESHOLD_BUG_REASON = (
+    "aggregator_mapper (src/reroll/name_mapping.py:105-112) only applies "
+    "the probability>=0.9 threshold to non-parselmouth sources; a "
+    "single-mapper parselmouth result with >1 candidate is always deferred "
+    "instead. See reroll-data's reroll_failure_analysis notebook, section "
+    "4a/4 -- 57.8% of every reroll failure in that corpus."
+)
+
+
+@pytest.fixture(scope="class")
+def real_relations_connection(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Iterator[sqlite3.Connection]:
+    """One real download/build of parselmouth's relations table (~90MB),
+    shared by every test in `TestAggregatorMapperAgainstRealData` rather
+    than repeated per test. A module-level (not class-method) fixture --
+    pytest 9 deprecates a class-scoped fixture defined as an instance
+    method, and this project's `filterwarnings = ["error"]` turns that
+    deprecation into a setup-time error.
+    """
+    db_path = tmp_path_factory.mktemp("parselmouth") / "parselmouth.sqlite3"
+    connection = open_parselmouth_database(db_path)
+    try:
+        yield connection
+    finally:
+        connection.close()
+
+
+class TestAggregatorMapperAgainstRealData:
+    """`aggregator_mapper` fed by `parselmouth_mapper`'s real, live evidence
+    (not a hand-built `Candidate` fixture) for two PyPI names known -- from
+    reroll-data's `reroll_failure_analysis` notebook -- to trigger the
+    parselmouth confidence-threshold bug: a real single-mapper parselmouth
+    result with more than one candidate, whose best candidate is well above
+    the 0.9 bar a non-parselmouth mapper would be held to. Confirms the bug
+    is reachable through the real pipeline, not just the hand-constructed
+    `Candidate` tuples in `test_name_mapping.py`.
+    """
+
+    @pytest.mark.network
+    @pytest.mark.xfail(
+        raises=UnresolvedCondaNameError,
+        reason=_AGGREGATOR_PARSELMOUTH_THRESHOLD_BUG_REASON,
+        strict=True,
+    )
+    def test_fastapi_reproduces_the_corpus_bug_end_to_end(
+        self, real_relations_connection: sqlite3.Connection
+    ) -> None:
+        """`fastapi`'s real parselmouth evidence is a single mapper
+        (`parselmouth_relations`) offering two `probability=0.95`
+        candidates (`fastapi`, `fastapi-core`) -- the exact case behind
+        57.8% of reroll-data's corpus failures
+        (`01OS`/`01os-0.0.1-py3-none-any.whl`). Should resolve to
+        `fastapi`; currently raises `UnresolvedCondaNameError`.
+        """
+        mapper = _mapper_from_connection(real_relations_connection)
+
+        result = map_name("fastapi", (mapper, aggregator_mapper))
+
+        assert result == "fastapi"
+
+    @pytest.mark.network
+    @pytest.mark.xfail(
+        raises=UnresolvedCondaNameError,
+        reason=_AGGREGATOR_PARSELMOUTH_THRESHOLD_BUG_REASON,
+        strict=True,
+    )
+    def test_pillow_reproduces_the_corpus_bug_end_to_end_with_low_probability_noise(
+        self, real_relations_connection: sqlite3.Connection
+    ) -> None:
+        """Same bug, `pillow`'s real evidence: one dominant `probability`
+        candidate (`0.9413`) alongside several near-zero-probability noise
+        candidates from that same single mapper -- reproducing the error
+        stored for `01memories`/`01memories-0.0.27-py3-none-any.whl`.
+        """
+        mapper = _mapper_from_connection(real_relations_connection)
+
+        result = map_name("pillow", (mapper, aggregator_mapper))
+
+        assert result == "pillow"

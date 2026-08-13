@@ -6,10 +6,12 @@ import logging
 from collections.abc import Sequence
 
 import pytest
+from packaging.requirements import InvalidRequirement
 from packaging.utils import NormalizedName
 
 from reroll.dependencies.pep508_to_matchspec import pep508_to_matchspec
 from reroll.errors import (
+    InvalidRequirementError,
     UnconvertableMarkerError,
     UnconvertableRequirementError,
     UnresolvedCondaNameError,
@@ -310,6 +312,62 @@ class TestRejections:
         entry = 'requests @ https://example.com/pkg.whl ; extra == "foo"'
 
         with pytest.raises(UnconvertableRequirementError, match="extra"):
+            pep508_to_matchspec(entry, (aggregator_mapper,))
+
+
+# --------------------------------------------------------------------------
+# Malformed `entry`: `Requirement(entry)` itself fails to parse
+# --------------------------------------------------------------------------
+
+
+class TestMalformedEntryLeaksInvalidRequirement:
+    """Confirmed bug (reroll-data's `reroll_failure_analysis` notebook,
+    root-caused across `reroll` + `markerpry`, 26 rows as
+    `unexpected: InvalidRequirement`): `pep508_to_matchspec`'s
+    `requirement = Requirement(entry)` has no `try`/`except`, so any
+    caller-assembled `entry` that fails PEP 508 parsing leaks a bare
+    `packaging.requirements.InvalidRequirement` instead of one of this
+    module's own documented `RerollError`s.
+
+    One concrete way `calculate_dependencies` assembles such an `entry`:
+    `markerpry`'s `CompareNode.__str__` (`markerpry/node.py:99`)
+    unconditionally wraps a marker literal in a fresh, unescaped pair of
+    double quotes, corrupting round-tripping for any literal that already
+    contains a `"` -- reachable via a pre-PEP-508 marker abusing `extra` to
+    smuggle a `python_version` literal, which PEP 685's `canonicalize_name`
+    then re-quotes on parse (`bcdoc-0.15.0`'s real
+    `extra == ':python_version=="2.6"'` becomes the literal
+    `':python-version=="2-6"'`, then `str()`-renders as the doubly-quoted,
+    unparseable `extra == ":python-version=="2-6""`). `entry` below is
+    exactly that rendered string, standing in for whatever upstream
+    assembly produced it -- this test is about `pep508_to_matchspec`'s own
+    missing `except`, independent of whether `markerpry` is ever fixed.
+    """
+
+    _REASON = (
+        "pep508_to_matchspec's `requirement = Requirement(entry)` "
+        "(src/reroll/dependencies/pep508_to_matchspec.py) has no try/except, "
+        "so a malformed `entry` leaks a bare "
+        "packaging.requirements.InvalidRequirement instead of an "
+        "InvalidRequirementError. See reroll-data's "
+        "reroll_failure_analysis notebook, section 5a (unexpected: "
+        "InvalidRequirement)."
+    )
+
+    @pytest.mark.xfail(raises=InvalidRequirement, reason=_REASON, strict=True)
+    def test_unparseable_entry_should_raise_invalid_requirement_error(self) -> None:
+        entry = 'ordereddict==1.1; extra == ":python-version=="2-6""'
+
+        with pytest.raises(InvalidRequirementError):
+            pep508_to_matchspec(entry, (aggregator_mapper,))
+
+    def test_confirms_the_leaked_exception_really_is_the_bare_packaging_one(self) -> None:
+        """Not `xfail`: pins down *which* exception currently escapes, so a
+        fix that raises a different, still-wrong exception is caught too.
+        """
+        entry = 'ordereddict==1.1; extra == ":python-version=="2-6""'
+
+        with pytest.raises(InvalidRequirement):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
 

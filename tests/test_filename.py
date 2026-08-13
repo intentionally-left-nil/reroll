@@ -18,6 +18,7 @@ from reroll.errors import (
     InvalidCondaNameError,
     InvalidInterpreterTagError,
     InvalidPythonRequirementRangeError,
+    RerollError,
     UnresolvedCondaNameError,
     UnsupportedFreeThreadedVersionError,
     UnsupportedInterpreterError,
@@ -1133,6 +1134,63 @@ class TestParseFilenameAbi3Explosion:
         parse_filename(
             "tinylib-1.2.3-cp313-cp313-manylinux_2_17_x86_64.whl", mappers=(aggregator_mapper,)
         )
+
+
+# --------------------------------------------------------------------------
+# `parse_filename` when every tag is dropped by `explode_abi3` itself,
+# leaving `tags` (and hence `errors`) empty (docs/wheel_filename.md;
+# reroll-data's reroll_failure_analysis notebook, section 5a: 253 rows as
+# `unexpected: IndexError`).
+# --------------------------------------------------------------------------
+
+
+class TestParseFilenameEmptyTagsAfterAbi3Explosion:
+    """Confirmed bug: `parse_filename`'s `if not configs: raise errors[-1]`
+    assumes `errors` is non-empty whenever `configs` is empty. That
+    invariant breaks when `tags` is already empty *before* the per-tag
+    loop runs -- so `errors` never gets appended to -- which happens for a
+    compound abi3 tag (e.g. `abi3.abi3t`, two distinct `Tag`s from
+    `packaging.utils.parse_wheel_filename`) whose interpreter minor is
+    already past `abi3_upper_bound`: both tags are a *legal*
+    `(interpreter, abi)` pairing, so `explode_abi3` explodes each into its
+    per-minor range rather than leaving it unchanged for `WheelConfig` to
+    reject -- and a floor past the upper bound makes that range empty for
+    every tag, leaving nothing (not even a rejection) behind.
+
+    Real repro in the corpus: `ast-serialize` /
+    `ast_serialize-0.7.0-cp315-abi3.abi3t-macosx_10_12_x86_64.whl`, and its
+    sibling platform wheels.
+    """
+
+    _REASON = (
+        "parse_filename's `if not configs: raise errors[-1]` "
+        "(src/reroll/filename/__init__.py:112) assumes `errors` is "
+        "non-empty whenever `configs` is empty; a compound abi3 tag whose "
+        "minor is past abi3_upper_bound explodes to zero tags (not a "
+        "rejection), leaving both `configs` and `errors` empty and raising "
+        "IndexError. See reroll-data's reroll_failure_analysis notebook, "
+        "section 5a (unexpected: IndexError)."
+    )
+
+    @pytest.mark.xfail(raises=IndexError, reason=_REASON, strict=True)
+    def test_compound_abi3_tag_past_the_upper_bound_should_raise_a_reroll_error(self) -> None:
+        with pytest.raises(RerollError):
+            parse_filename(
+                "ast_serialize-0.7.0-cp315-abi3.abi3t-macosx_10_12_x86_64.whl",
+                mappers=(aggregator_mapper,),
+                abi3_upper_bound="3.13",
+            )
+
+    def test_confirms_the_leaked_exception_really_is_a_bare_index_error(self) -> None:
+        """Not `xfail`: pins down *which* exception currently escapes, so a
+        fix that raises a different, still-wrong exception is caught too.
+        """
+        with pytest.raises(IndexError):
+            parse_filename(
+                "ast_serialize-0.7.0-cp315-abi3.abi3t-macosx_10_12_x86_64.whl",
+                mappers=(aggregator_mapper,),
+                abi3_upper_bound="3.13",
+            )
 
 
 # --------------------------------------------------------------------------

@@ -6,17 +6,26 @@ import logging
 
 import pytest
 
+from reroll.dependencies import calculate_dependencies, wheel_dependencies
 from reroll.dependencies.extras import find_extras
 from reroll.dependencies.python import python_dependencies
 from reroll.dependencies.requires_dist import strip_interpreter_requirements
 from reroll.errors import PythonRangeMismatchError
-from reroll.filename import WheelConfig
+from reroll.filename import Arch, WheelConfig
+from reroll.name_mapping import aggregator_mapper
+from reroll.subdir import CondaSubdir
 from reroll.wheel_metadata import WheelMetadata
 
 
-def _config(*, interpreter: str = "py3", abi: str = "none") -> WheelConfig:
-    """A valid `WheelConfig` (py3-none-any) with the interpreter/abi tag
-    overridden for tests that only care about the python/python_abi axis.
+def _config(
+    *,
+    interpreter: str = "py3",
+    abi: str = "none",
+    platform: str = "any",
+    arch: Arch | None = None,
+) -> WheelConfig:
+    """A valid `WheelConfig` (py3-none-any) with the interpreter/abi/platform/arch
+    tags overridden for tests that only care about one axis at a time.
     """
     return WheelConfig(
         normalized_pypi_name="tinylib",
@@ -25,8 +34,8 @@ def _config(*, interpreter: str = "py3", abi: str = "none") -> WheelConfig:
         build=(),
         interpreter=interpreter,
         abi=abi,
-        platform="any",
-        arch=None,
+        platform=platform,
+        arch=arch,
     )
 
 
@@ -324,3 +333,74 @@ class TestFindExtras:
         requires_dist = (f'httpx>=0.23.0; extra == "{long_name}"',)
 
         assert find_extras(requires_dist) == {long_name}
+
+
+# --------------------------------------------------------------------------
+# `wheel_dependencies`: package entrypoint -- noarch vs. arch-split retry
+# --------------------------------------------------------------------------
+
+
+class TestWheelDependenciesNoarch:
+    def test_noarch_wheel_returns_a_single_none_keyed_result(self) -> None:
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(requires_dist=("requests>=2.0.0",))
+
+        result = wheel_dependencies(config, metadata, (aggregator_mapper,))
+
+        assert result == {
+            None: calculate_dependencies(config, metadata, (aggregator_mapper,), subdir=None)
+        }
+
+    def test_allow_pre_is_passed_through(self) -> None:
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(requires_dist=("requests==1.0.0rc1",))
+
+        result = wheel_dependencies(config, metadata, (aggregator_mapper,), allow_pre=True)
+
+        assert result[None].depends == ("requests ==1.0.0.rc1", "python >=3.0")
+
+    def test_unsolvable_python_range_raises(self) -> None:
+        config = _config(interpreter="cp39", abi="cp39")
+        metadata = _metadata(requires_python=">=3.10")
+
+        with pytest.raises(PythonRangeMismatchError):
+            wheel_dependencies(config, metadata, (aggregator_mapper,))
+
+
+class TestWheelDependenciesArchSplit:
+    def test_arch_specific_marker_emits_one_result_per_subdir(self) -> None:
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(requires_dist=('requests>=2.0.0; platform_machine == "x86_64"',))
+
+        result = wheel_dependencies(config, metadata, (aggregator_mapper,))
+
+        assert set(result) == set(CondaSubdir)
+        for subdir in CondaSubdir:
+            assert result[subdir] == calculate_dependencies(
+                config, metadata, (aggregator_mapper,), subdir=subdir
+            )
+
+    def test_linux_64_resolves_the_matching_arch_marker(self) -> None:
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(requires_dist=('requests>=2.0.0; platform_machine == "x86_64"',))
+
+        result = wheel_dependencies(config, metadata, (aggregator_mapper,))
+
+        assert result[CondaSubdir.LINUX_64].depends == ("requests >=2.0.0", "python >=3.0")
+        assert result[CondaSubdir.LINUX_AARCH64].depends == ("python >=3.0",)
+
+
+class TestWheelDependenciesPlatformSpecific:
+    def test_platform_specific_wheel_is_not_yet_implemented(self) -> None:
+        """Converting a wheel whose filename is already platform-specific
+        (not noarch) needs a platform-tag -> `CondaSubdir` mapping that
+        doesn't exist yet (docs/wheel_filename.md's Platform tag section
+        says nothing about this mapping).
+        """
+        config = _config(
+            interpreter="cp313", abi="cp313", platform="manylinux_2_17_x86_64", arch=Arch.X86_64
+        )
+        metadata = _metadata()
+
+        with pytest.raises(NotImplementedError):
+            wheel_dependencies(config, metadata, (aggregator_mapper,))

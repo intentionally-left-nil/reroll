@@ -288,15 +288,16 @@ class TestExtraOnlyDependency:
         }
 
 
-class TestUnconditionalDependencyIsDuplicatedIntoExtras:
+class TestUnconditionalDependencyIsDedupedFromExtras:
     """docs/wheel_to_conda_dependencies.md's `packageB` example: a
     marker-free entry is unconditionally true for the base environment
-    *and* every extra environment, so it is deliberately duplicated rather
-    than excluded from the extras -- de-duplication against the base is a
-    separate, later post-processing step this function does not perform.
+    *and* every extra environment -- but the exact-string-match
+    post-processing step (docs "Splitting base dependencies from extras")
+    removes it from each extra's list once it's already in `depends`, so
+    the final result carries it only once.
     """
 
-    def test_marker_free_entry_appears_in_base_and_every_extra(self) -> None:
+    def test_marker_free_entry_ends_up_only_in_base_depends(self) -> None:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(
             requires_dist=(
@@ -308,7 +309,48 @@ class TestUnconditionalDependencyIsDuplicatedIntoExtras:
         result = _dependencies(config, metadata, (aggregator_mapper,))
 
         assert result.depends == ("requests >=2.0.0", "python >=3.0")
-        assert result.extra_depends == {"standard": ("requests >=2.0.0", "httpx >=0.23.0")}
+        assert result.extra_depends == {"standard": ("httpx >=0.23.0",)}
+
+    def test_dedup_only_removes_exact_string_matches(self) -> None:
+        """`requests>=1.2` is marker-free, so it's an exact match removed
+        from `major-bump`'s list too -- but `requests>=2.0` (only true for
+        `major-bump`) has a different version constraint and is not an
+        exact match against anything in `depends`, so it survives.
+        """
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(
+            requires_dist=(
+                "requests>=1.2",
+                'requests>=2.0; extra == "major-bump"',
+            )
+        )
+
+        result = _dependencies(config, metadata, (aggregator_mapper,))
+
+        assert result.depends == ("requests >=1.2", "python >=3.0")
+        assert result.extra_depends == {"major-bump": ("requests >=2.0",)}
+
+    def test_dedup_does_not_apply_across_two_different_extras(self) -> None:
+        """A dependency shared by two extras (but not the base), e.g.
+        FastAPI's `httpx` under both `standard` and `all`, is kept in
+        both -- dedup only ever removes an extra's entry against `depends`,
+        never against another extra.
+        """
+        config = _config(interpreter="py3", abi="none")
+        metadata = _metadata(
+            requires_dist=(
+                'httpx>=0.23.0; extra == "standard"',
+                'httpx>=0.23.0; extra == "all"',
+            )
+        )
+
+        result = _dependencies(config, metadata, (aggregator_mapper,))
+
+        assert result.depends == ("python >=3.0",)
+        assert result.extra_depends == {
+            "standard": ("httpx >=0.23.0",),
+            "all": ("httpx >=0.23.0",),
+        }
 
 
 class TestMixedMarkerAndExtraClause:

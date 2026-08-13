@@ -29,12 +29,11 @@ class WheelDependencies(NamedTuple):
     name, `reroll.dependencies.extras.find_extras`) only when that extra
     is requested.
 
-    A MatchSpec present in `depends` may also appear in one or more
-    `extra_depends` entries -- a `Requires-Dist` entry with no `extra`
-    clause at all applies unconditionally to the base install *and* every
-    extra (docs/wheel_to_conda_dependencies.md's "Splitting base
-    dependencies from extras"). De-duplicating those against the base is
-    a separate, later post-processing step this type does not perform.
+    A MatchSpec never appears in both `depends` and one of
+    `extra_depends`' lists -- `calculate_dependencies` removes any exact
+    string match from the latter, per docs/wheel_to_conda_dependencies.md's
+    "Splitting base dependencies from extras". Two different extras may
+    still share a MatchSpec between themselves; that's not deduplicated.
     """
 
     depends: tuple[str, ...]
@@ -57,8 +56,11 @@ def calculate_dependencies(
     every `Requires-Dist` entry (after stripping bare interpreter
     requirements, `reroll.dependencies.requires_dist.strip_interpreter_requirements`),
     in addition to the base (`extra=""`) -- so an entry with no `extra`
-    clause at all is added to `depends` *and* every extra's list, per
-    `WheelDependencies`. `python`/`python_abi` (`reroll.dependencies.python.python_dependencies`)
+    clause at all is initially a candidate for `depends` *and* every
+    extra's list, but any exact string match is then removed from the
+    latter (docs/wheel_to_conda_dependencies.md's "Splitting base
+    dependencies from extras" -- see `WheelDependencies`).
+    `python`/`python_abi` (`reroll.dependencies.python.python_dependencies`)
     are appended to `depends` last, matching real conda-pypi output's field
     order.
 
@@ -101,7 +103,7 @@ def calculate_dependencies(
     depends.extend(python_dependencies(config, metadata))
     return WheelDependencies(
         depends=tuple(depends),
-        extra_depends={name: tuple(deps) for name, deps in extra_depends.items()},
+        extra_depends=_dedupe_extras(depends, extra_depends),
     )
 
 
@@ -139,3 +141,16 @@ def _bare_entry(requirement: Requirement) -> str:
     if requirement.specifier:
         parts.append(str(requirement.specifier))
     return "".join(parts)
+
+
+def _dedupe_extras(
+    depends: list[str], extra_depends: dict[str, list[str]]
+) -> dict[str, tuple[str, ...]]:
+    """`extra_depends`, with any MatchSpec already an exact string match in
+    `depends` removed from each extra's list -- never across two different
+    extras (`WheelDependencies`).
+    """
+    return {
+        name: tuple(matchspec for matchspec in deps if matchspec not in depends)
+        for name, deps in extra_depends.items()
+    }

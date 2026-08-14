@@ -5,9 +5,10 @@ evaluation instead of a hardcoded expected string -- particularly around
 pre-release (rc/alpha/beta/dev) ordering and range-boundary cutoffs
 (`~=` expansion, glob rewriting, epochs).
 
-`TestExclusiveComparatorPrePostReleaseCarveOut` at the bottom documents a
-real, confirmed disagreement the sweep above deliberately excludes -- see
-that class's docstring.
+`TestExclusiveComparatorPrePostReleaseCarveOut` at the bottom covers `<`/`>`
+specifically: PEP 440's exclusive-comparator carve-out, which excludes a
+version literal's own pre-/post-release family, something the other
+operators (covered by the sweep above) don't need.
 """
 
 from __future__ import annotations
@@ -39,10 +40,9 @@ _VERSION_CANDIDATES = (
     "2.0.0a0",
 )
 
-# `==`, `!=`, `>=`, `<=` (and, by construction, `~=` and the glob rewrites)
-# are the operators confirmed equivalent below -- strict `<`/`>` are
-# deliberately excluded; see `TestExclusiveComparatorPrePostReleaseCarveOut`.
-_VERIFIED_EQUIVALENT_COMPARATORS = ("==", "!=", ">=", "<=")
+# `==`, `!=`, `>=`, `<=`, `>`, `<` (and, by construction, `~=` and the glob
+# rewrites) are all confirmed equivalent below.
+_VERIFIED_EQUIVALENT_COMPARATORS = ("==", "!=", ">=", "<=", ">", "<")
 
 
 class TestPlainOperatorEquivalence:
@@ -241,58 +241,109 @@ class TestEpochEquivalence:
 
 
 class TestExclusiveComparatorPrePostReleaseCarveOut:
-    """PEP 440 gives strict `<`/`>` a carve-out that docs/matchspec.md's
-    Operator conversion section doesn't mention, and that reroll's plain
-    passthrough conversion (`_convert_specifier`) doesn't implement:
+    """PEP 440 gives strict `<`/`>` a carve-out that the other operators
+    (covered by the sweep in `TestPlainOperatorEquivalence`) don't need:
 
     * `<V` excludes *every* pre-release of `V` itself (dev, alpha, beta,
       rc) -- not just versions mathematically below `V` -- unless `V` is
       itself a pre-release.
     * `>V` excludes *every* post-release of `V` itself -- unless `V` is
-      itself a post-release.
+      itself a post-release or dev-release.
 
     (`packaging`'s `_ranges.standard_ranges` implements exactly this; see
-    the `>V`/`<V` branches.) Reroll converts `<V`/`>V` to a matchspec
-    verbatim, which has no such carve-out -- conda's plain version
-    ordering compares mathematically, with no notion that a pre-release of
-    `V` should be treated as "not less than `V`" for this one comparator.
-
-    Each case below is a confirmed, reproducible disagreement between
-    pip's own evaluation and reroll's current conversion -- `xfail`ed
-    rather than silently fixed or dropped, so it stays visible pending a
-    decision on docs/matchspec.md's "operators pass through as-is" claim,
-    which this contradicts. (`~=` and the `==X.Y.*` glob rewrite are
-    *not* affected -- see `TestCompatibleReleaseEquivalence`'s docstring
-    for why the `.0a0` anchor they use sidesteps this exact issue.)
+    the `>V`/`<V` branches.) `_convert_exclusive_comparator` reproduces it:
+    `<V` anchors at `<V.dev0` (below every pre-release of `V`) when `V`
+    isn't itself a pre-release, and `>V` adds a `!=V.post*` exclusion
+    clause when `V` is neither a post- nor a dev-release.
     """
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="PEP 440 <V excludes every pre-release of V; matchspec's plain <V does not",
-    )
-    def test_strict_less_than_wrongly_includes_a_dev_release_of_the_boundary(self) -> None:
-        assert_matchspec_agrees_with_pip("<1.0.0", ["1.0.0.dev0"])
+    def test_strict_less_than_excludes_a_dev_release_of_the_boundary(self) -> None:
+        assert_matchspec_agrees_with_pip("<1.0.0", ["1.0.0.dev0"], allow_pre=True)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="PEP 440 <V excludes every pre-release of V; matchspec's plain <V does not",
-    )
-    def test_strict_less_than_wrongly_includes_an_rc_release_of_the_boundary(self) -> None:
-        assert_matchspec_agrees_with_pip("<1.0.0", ["1.0.0rc1"])
+    def test_strict_less_than_excludes_an_rc_release_of_the_boundary(self) -> None:
+        assert_matchspec_agrees_with_pip("<1.0.0", ["1.0.0rc1"], allow_pre=True)
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="PEP 440 >V excludes every post-release of V; matchspec's plain >V does not",
-    )
-    def test_strict_greater_than_wrongly_includes_a_post_release_of_the_boundary(self) -> None:
-        assert_matchspec_agrees_with_pip(">1.0.0", ["1.0.0.post1"])
+    def test_strict_less_than_still_includes_versions_below_the_boundary(self) -> None:
+        assert_matchspec_agrees_with_pip("<1.0.0", ["0.9.9", "1.0.0a0", "0.9.9.post1"])
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "classic PEP 440 gotcha: '>=X.rc1,<X' matches nothing in pip, since <X "
-            "excludes X's whole pre-release family regardless of the lower bound"
-        ),
-    )
+    def test_strict_less_than_with_a_pre_release_boundary_is_a_plain_passthrough(self) -> None:
+        """`V` itself a pre-release (`1.0.0rc1`) needs no carve-out --
+        `<1.0.0rc1` already excludes everything at or above `1.0.0rc1`
+        via ordinary comparison, dev-releases of `1.0.0rc1` included.
+        """
+        assert_matchspec_agrees_with_pip(
+            "<1.0.0rc1",
+            ["1.0.0.dev0", "1.0.0a0", "1.0.0rc1.dev0", "1.0.0rc1", "1.0.0"],
+            allow_pre=True,
+        )
+
+    def test_strict_less_than_with_a_post_release_boundary_excludes_its_dev_releases(
+        self,
+    ) -> None:
+        """`V` a post-release (`1.0.0.post1`, not itself a pre-release)
+        still gets the carve-out -- it excludes dev-releases of that
+        specific post-release, which sort below `V` mathematically but
+        count as `V`'s own pre-release family.
+        """
+        assert_matchspec_agrees_with_pip(
+            "<1.0.0.post1",
+            ["1.0.0.post1.dev0", "1.0.0.post0", "1.0.0", "1.0.0.post1"],
+            allow_pre=True,
+        )
+
+    def test_strict_greater_than_excludes_a_post_release_of_the_boundary(self) -> None:
+        assert_matchspec_agrees_with_pip(">1.0.0", ["1.0.0.post1", "1.0.0.post999999"])
+
+    def test_strict_greater_than_still_includes_versions_above_the_boundary(self) -> None:
+        assert_matchspec_agrees_with_pip(">1.0.0", ["1.0.1", "1.0.1a0", "2.0.0"], allow_pre=True)
+
+    def test_strict_greater_than_with_a_pre_release_boundary_excludes_its_post_releases(
+        self,
+    ) -> None:
+        assert_matchspec_agrees_with_pip(
+            ">1.0.0rc1",
+            ["1.0.0rc1.post0", "1.0.0rc1", "1.0.0rc2", "1.0.0"],
+            allow_pre=True,
+        )
+
+    def test_strict_greater_than_with_a_dev_release_boundary_is_a_plain_passthrough(self) -> None:
+        assert_matchspec_agrees_with_pip(
+            ">1.0.0.dev1", ["1.0.0.dev0", "1.0.0.dev2", "1.0.0a0", "1.0.0"], allow_pre=True
+        )
+
+    def test_strict_greater_than_with_a_post_release_boundary_is_a_plain_passthrough(
+        self,
+    ) -> None:
+        assert_matchspec_agrees_with_pip(">1.0.0.post1", ["1.0.0.post0", "1.0.0.post2", "1.0.1"])
+
+    def test_strict_greater_than_carve_out_respects_the_epoch(self) -> None:
+        assert_matchspec_agrees_with_pip(
+            ">1!1.0.0", ["1!1.0.0.post1", "1.0.0.post1", "2!1.0.0.post1", "1!1.0.1"]
+        )
+
+    def test_strict_greater_than_carve_out_respects_the_epoch_with_a_pre_release_boundary(
+        self,
+    ) -> None:
+        """The `>V` fix's `!=V.post*` exclusion clause must be scoped to
+        `V`'s own epoch even when `V` is a pre-release, not just when `V`
+        is a plain release (`test_strict_greater_than_carve_out_respects_the_epoch`
+        above).
+        """
+        assert_matchspec_agrees_with_pip(
+            ">1!1.0.0rc1",
+            [
+                "1!1.0.0rc1.post0",  # same epoch, V's own post family -- excluded
+                "1.0.0rc1.post0",  # epoch 0 -- already excluded by the epoch itself
+                "2!1.0.0rc1.post0",  # higher epoch -- not part of V's family
+                "1!1.0.0rc2",
+                "1!1.0.0",
+            ],
+            allow_pre=True,
+        )
+
     def test_rc_lower_bound_with_a_plain_upper_bound_is_an_empty_range_in_pip(self) -> None:
+        """Classic PEP 440 gotcha: `>=X.rc1,<X` matches nothing in pip,
+        since `<X` excludes `X`'s whole pre-release family regardless of
+        the lower bound.
+        """
         assert_matchspec_agrees_with_pip(">=1.0.0rc1,<1.0.0", ["1.0.0rc1"], allow_pre=True)

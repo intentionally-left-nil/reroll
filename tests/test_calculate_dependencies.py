@@ -481,7 +481,7 @@ class TestRepeatedDependencyNames:
 
         result = _dependencies(config, metadata, (aggregator_mapper,))
 
-        assert result.depends == ("requests >=1.2", "requests <3.0", "python >=3.0")
+        assert result.depends == ("requests >=1.2", "requests <3.0.dev0", "python >=3.0")
 
     def test_two_different_pypi_names_mapping_to_the_same_conda_name_are_not_merged(
         self,

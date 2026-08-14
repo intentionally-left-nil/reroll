@@ -93,6 +93,7 @@ class TestHierarchy:
             InvalidPythonRequirementRangeError,
             InvalidRequirementError,
             InvalidVersionSpecifierError,
+            PythonRangeMismatchError,
         ],
     )
     def test_invalid_wheel_leaf_is_an_invalid_wheel_error(
@@ -105,7 +106,6 @@ class TestHierarchy:
         [
             InvalidCondaNameError,
             NeedsArchSplitError,
-            PythonRangeMismatchError,
             UnconvertableMarkerError,
             UnconvertableRequirementError,
             UnresolvedCondaNameError,

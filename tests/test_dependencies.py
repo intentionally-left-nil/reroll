@@ -185,7 +185,7 @@ class TestRequiresPythonTightening:
         config = _config(interpreter="cp39", abi="cp39")
 
         with (
-            caplog.at_level(logging.WARNING, logger="reroll.unconvertable"),
+            caplog.at_level(logging.WARNING, logger="reroll.invalid"),
             pytest.raises(PythonRangeMismatchError) as exc_info,
         ):
             python_dependencies(config, _metadata(requires_python=">=3.10"))

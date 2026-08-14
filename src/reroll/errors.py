@@ -145,6 +145,15 @@ class InvalidPythonRequirementRangeError(RerollInvalidWheelError):
     """
 
 
+class PythonRangeMismatchError(RerollInvalidWheelError):
+    """A wheel's filename-implied Python range and its `Requires-Python`
+    metadata -- each independently a valid, contiguous range -- do not
+    intersect at all, the same shape as `MetadataFilenameMismatchError`
+    but for the Python range instead of the name/version. No valid record
+    can be emitted for it.
+    """
+
+
 class InvalidRequirementError(RerollInvalidWheelError):
     """A `Requires-Dist` entry that does not parse as a PEP 508 requirement,
     even after every lenient fixup has been tried.
@@ -183,13 +192,6 @@ class NeedsArchSplitError(RerollUnconvertableError):
     `sys_platform`, or `os_name`) after evaluating it against the known
     Python pinning and extra. A single noarch record can't represent it;
     the caller must emit one record per `CondaSubdir` instead.
-    """
-
-
-class PythonRangeMismatchError(RerollUnconvertableError):
-    """A wheel's filename-implied Python range and its `Requires-Python`
-    metadata do not intersect at all -- no valid record can be emitted for
-    it.
     """
 
 

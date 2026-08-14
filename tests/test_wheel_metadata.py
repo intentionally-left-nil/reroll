@@ -538,6 +538,23 @@ class TestRequiresPython:
                 )
             )
 
+    def test_micro_level_floor_within_a_single_minor_is_accepted(self) -> None:
+        """`>=3.9.16` is a genuinely contiguous minor-9-onward range --
+        `3.9.0` itself just isn't one of the satisfying releases. This
+        must not be rejected as non-contiguous just because the floor
+        falls strictly inside minor 9 rather than at its start.
+        """
+        metadata = parse_metadata(
+            _text(
+                "Metadata-Version: 2.1",
+                "Name: tinylib",
+                "Version: 1.0",
+                "Requires-Python: >=3.9.16",
+            )
+        )
+
+        assert metadata.requires_python == ">=3.9.16"
+
 
 # --------------------------------------------------------------------------
 # `requires_dist`

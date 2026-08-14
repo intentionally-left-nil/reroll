@@ -111,6 +111,10 @@ def _convert_specifier(specifier: Specifier, entry: str, *, allow_pre: bool) -> 
         if specifier.operator == "!=":
             return [f"!={specifier.version}"]
         return [f"={specifier.version[:-2]}"]
+    if specifier.operator in ("<", ">"):
+        return _convert_exclusive_comparator(
+            specifier.operator, specifier.version, entry, allow_pre=allow_pre
+        )
     operator = "==" if specifier.operator == "===" else specifier.operator
     try:
         version = Version(specifier.version)
@@ -133,6 +137,36 @@ def _expand_compatible_release(raw_version: str, entry: str, *, allow_pre: bool)
     epoch_prefix = f"{version.epoch}!" if version.epoch else ""
     upper_release = ".".join(str(segment) for segment in bumped)
     return [f">={format_version(version)}", f"<{epoch_prefix}{upper_release}.0a0"]
+
+
+def _convert_exclusive_comparator(
+    operator: str, raw_version: str, entry: str, *, allow_pre: bool
+) -> list[str]:
+    """`<V`/`>V`'s PEP 440 carve-out (the "Version specifiers" spec's
+    Exclusive ordered comparison): `<V` excludes every pre-release of `V`
+    unless `V` is itself a pre-release, and `>V` excludes every
+    post-release of `V` unless `V` is itself a post-release or dev-release.
+    Conda's plain ordered comparison has no such family exception, so a
+    passthrough `<V`/`>V` is only correct when `V` already carries the
+    suffix (pre, dev, or post) that makes the carve-out a no-op; otherwise
+    the boundary needs an explicit anchor (`<V` -> `<V.dev0`, below every
+    pre-release of `V`) or an extra exclusion clause (`>V` -> `>V,!=V.post*`,
+    since post-releases of `V` have no fixed upper anchor).
+
+    `raw_version` is always a valid PEP 440 version here: unlike `===`,
+    `packaging.specifiers.Specifier` itself rejects a non-PEP-440 version
+    for `<`/`>` before this function ever sees it.
+    """
+    version = Version(raw_version)
+    _reject_unsupported_version(version, entry, allow_pre=allow_pre)
+    formatted = format_version(version)
+    if operator == "<":
+        if version.is_prerelease:
+            return [f"<{formatted}"]
+        return [f"<{formatted}.dev0"]
+    if version.dev is not None or version.post is not None:
+        return [f">{formatted}"]
+    return [f">{formatted}", f"!={formatted}.post*"]
 
 
 def _reject_unsupported_version(version: Version, entry: str, *, allow_pre: bool) -> None:

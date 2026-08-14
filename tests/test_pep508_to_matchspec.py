@@ -75,11 +75,49 @@ class TestName:
 
 
 class TestOperators:
-    @pytest.mark.parametrize("operator", [">=", "<=", ">", "<", "!="])
+    @pytest.mark.parametrize("operator", [">=", "<=", "!="])
     def test_operator_is_passed_through_as_is(self, operator: str) -> None:
         assert (
             pep508_to_matchspec(f"requests{operator}2.0.0", (aggregator_mapper,))
             == f"requests {operator}2.0.0"
+        )
+
+    def test_strict_less_than_gets_the_pre_release_carve_out_anchor(self) -> None:
+        """`<V` for a non-pre-release `V` anchors at `<V.dev0`, below
+        every pre-release of `V` -- see
+        `TestExclusiveComparatorPrePostReleaseCarveOut` in
+        `test_version_matchspec_equivalence.py` for the PEP 440 rule this
+        reproduces.
+        """
+        assert pep508_to_matchspec("requests<2.0.0", (aggregator_mapper,)) == "requests <2.0.0.dev0"
+
+    def test_strict_greater_than_gets_the_post_release_carve_out_exclusion(self) -> None:
+        assert (
+            pep508_to_matchspec("requests>2.0.0", (aggregator_mapper,))
+            == "requests >2.0.0,!=2.0.0.post*"
+        )
+
+    @pytest.mark.parametrize("operator", ["<", ">"])
+    def test_strict_less_or_greater_than_rejects_a_pre_release_by_default(
+        self, operator: str
+    ) -> None:
+        with pytest.raises(UnconvertableRequirementError, match="pre-release"):
+            pep508_to_matchspec(f"requests{operator}2.0.0rc1", (aggregator_mapper,))
+
+    def test_strict_less_than_allow_pre_permits_a_pre_release_boundary(self) -> None:
+        """A pre-release boundary needs no carve-out anchor -- see
+        `TestExclusiveComparatorPrePostReleaseCarveOut` in
+        `test_version_matchspec_equivalence.py`.
+        """
+        assert (
+            pep508_to_matchspec("requests<2.0.0rc1", (aggregator_mapper,), allow_pre=True)
+            == "requests <2.0.0.rc1"
+        )
+
+    def test_strict_greater_than_allow_pre_permits_a_pre_release_boundary(self) -> None:
+        assert (
+            pep508_to_matchspec("requests>2.0.0rc1", (aggregator_mapper,), allow_pre=True)
+            == "requests >2.0.0.rc1,!=2.0.0.rc1.post*"
         )
 
     def test_arbitrary_equality_is_converted_to_double_equals(self) -> None:
@@ -235,6 +273,20 @@ class TestVersionFormatting:
             pep508_to_matchspec("requests>=1.2.3.4", (aggregator_mapper,)) == "requests >=1.2.3.4"
         )
 
+    def test_strict_less_than_carve_out_anchor_preserves_every_release_segment(self) -> None:
+        assert (
+            pep508_to_matchspec("requests<1.2.3.4", (aggregator_mapper,))
+            == "requests <1.2.3.4.dev0"
+        )
+
+    def test_strict_greater_than_carve_out_exclusion_preserves_every_release_segment(
+        self,
+    ) -> None:
+        assert (
+            pep508_to_matchspec("requests>1.2.3.4", (aggregator_mapper,))
+            == "requests >1.2.3.4,!=1.2.3.4.post*"
+        )
+
     def test_pre_post_and_dev_releases_all_combine_in_order(self) -> None:
         assert (
             pep508_to_matchspec(
@@ -260,6 +312,26 @@ class TestRejections:
     def test_local_version_label_error_names_the_entry(self) -> None:
         with pytest.raises(UnconvertableRequirementError, match="requests==1.0.0\\+local"):
             pep508_to_matchspec("requests==1.0.0+local", (aggregator_mapper,))
+
+    @pytest.mark.parametrize(
+        "entry",
+        ["requests<1.0.0+local", "requests>1.0.0+local"],
+    )
+    def test_local_version_label_with_strict_less_or_greater_than_is_rejected_by_packaging(
+        self, entry: str
+    ) -> None:
+        """Unlike `==`/`!=`/`===`, a local label combined with `<`/`>`
+        never reaches reroll's own local-version-label check
+        (`_reject_unsupported_version`, exercised by
+        `test_rejects_a_local_version_label` above): `packaging`'s PEP 508
+        parser rejects the combination itself ("Local version label can
+        only be used with `==` or `!=` operators"), so `Requirement(entry)`
+        already raises before `_convert_exclusive_comparator` runs --
+        surfacing as `InvalidRequirementError`, not
+        `UnconvertableRequirementError`.
+        """
+        with pytest.raises(InvalidRequirementError):
+            pep508_to_matchspec(entry, (aggregator_mapper,))
 
     def test_rejects_a_direct_url_reference(self) -> None:
         entry = "requests @ https://example.com/requests-1.0.0.whl"
@@ -542,7 +614,7 @@ class TestMarkers:
         entry = 'numpy<1.25.0,>=1.24.0; python_full_version == "3.8.*"'
 
         assert pep508_to_matchspec(entry, (aggregator_mapper,)) == (
-            'numpy <1.25.0,>=1.24.0[when="python=3.8"]'
+            'numpy <1.25.0.dev0,>=1.24.0[when="python=3.8"]'
         )
 
     def test_extras_and_marker_combine_in_one_bracket(self) -> None:

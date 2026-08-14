@@ -202,6 +202,19 @@ class UnconvertableMarkerError(RerollUnconvertableError):
     """
 
 
+class UnconvertablePythonVersionEqualityError(RerollUnconvertableError):
+    """`python_version == "X.Y.Z"` or `!= "X.Y.Z"`, where the literal has a
+    nonzero micro segment. `python_version` is always exactly
+    major.minor, so equality against such a literal can never hold (and
+    inequality against it always does) -- but unlike every other
+    `python_version` comparator, that constant result can't be expressed
+    as a `python<op>version` matchspec fragment. A leaf of its own,
+    rather than a case of `UnconvertableMarkerError`, so real-world
+    frequency can be measured before deciding how (or whether) to
+    represent it.
+    """
+
+
 class UnconvertableRequirementError(RerollUnconvertableError):
     """A PEP 508 requirement with no representable conda MatchSpec: a
     direct URL reference, a local version label, a pre-release version

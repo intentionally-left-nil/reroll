@@ -4,10 +4,24 @@ from __future__ import annotations
 
 import pytest
 from markerpry import TRUE, parse
+from packaging.markers import Marker
+from packaging.version import Version as PypiVersion
 from rattler import Version, VersionSpec
 
 from reroll.dependencies.marker_conversion import marker_condition
-from reroll.errors import UnconvertableMarkerError
+from reroll.dependencies.version_format import format_version
+from reroll.errors import UnconvertableMarkerError, UnconvertablePythonVersionEqualityError
+
+
+def _marker_evaluates(marker: str, full_version: str) -> bool:
+    """Whether `marker` (a `python_version` comparison) holds for a real
+    (full) python version, per `packaging.markers.Marker.evaluate` --
+    `python_version` is always major.minor, so `full_version` is
+    truncated before evaluating, matching what a real interpreter's
+    marker environment would report.
+    """
+    major, minor = full_version.split(".")[:2]
+    return Marker(marker).evaluate({"python_version": f"{major}.{minor}"})
 
 
 class TestPythonVersion:
@@ -34,8 +48,31 @@ class TestPythonVersion:
         with pytest.raises(UnconvertableMarkerError, match="python_version"):
             marker_condition(parse(marker))
 
-    @pytest.mark.parametrize("literal", ["3", "3.9.1", "3.x"])
-    def test_non_major_minor_literal_raises(self, literal: str) -> None:
+    def test_non_major_minor_literal_raises(self) -> None:
+        with pytest.raises(UnconvertableMarkerError, match="python_version"):
+            marker_condition(parse('python_version == "3.x"'))
+
+    @pytest.mark.parametrize("comparator", ["==", "!="])
+    def test_nonzero_micro_equality_literal_raises_its_own_error(self, comparator: str) -> None:
+        """`python_version` can never carry a nonzero micro segment, so
+        equality (or inequality) against a literal that has one is a
+        constant, not a matchspec range -- see
+        `TestPythonVersionNonzeroMicroLiteralEquality` for the underlying
+        ground truth. This gets its own error class, rather than the
+        generic `UnconvertableMarkerError`, so its real-world frequency
+        can be measured separately.
+        """
+        with pytest.raises(UnconvertablePythonVersionEqualityError, match="python_version"):
+            marker_condition(parse(f'python_version {comparator} "3.9.1"'))
+
+    @pytest.mark.parametrize("literal", ["3.9.0rc1", "3.9.0.post1", "3.9.0.dev1", "1!3.9"])
+    def test_non_plain_release_literal_raises(self, literal: str) -> None:
+        """A literal with an epoch, pre-release, post-release, or
+        dev-release component isn't a plain major[.minor[.micro]] release,
+        so it's rejected the same way an unparseable literal is -- this
+        codebase has no derivation for what such a literal should mean
+        against `python_version`.
+        """
         with pytest.raises(UnconvertableMarkerError, match="python_version"):
             marker_condition(parse(f'python_version == "{literal}"'))
 
@@ -64,6 +101,176 @@ class TestPythonVersion:
         assert VersionSpec(">3.9").matches(Version("3.9.1"))
 
 
+class TestPythonVersionBareMajorLiteral:
+    """A bare-major literal (`python_version == "3"`, no minor segment) is
+    PEP 440-equivalent to `"3.0"`: a version's trailing zero release
+    segments are insignificant, so `packaging`'s own marker evaluation
+    treats `"3"` and `"3.0"` identically. The matchspec produced for it
+    must therefore reproduce `packaging.markers.Marker.evaluate`'s result
+    for every real (full) python version whose *truncated* major.minor is
+    fed into that evaluation -- not just at the `3.0`/`3.1` boundary
+    itself, but also across a pre-release of that boundary and a
+    higher major version.
+    """
+
+    _FULL_VERSIONS = ["3.0.0", "3.0.1", "3.0.0a0", "3.1.0", "3.9.5", "4.0.0"]
+
+    @pytest.mark.parametrize(
+        ("comparator", "expected"),
+        [("==", "python>=3.0.0a0,<3.1.0a0"), (">=", "python>=3.0.0a0")],
+    )
+    def test_matchspec_matches_the_marker_for_every_full_version(
+        self, comparator: str, expected: str
+    ) -> None:
+        condition = marker_condition(parse(f'python_version {comparator} "3"'))
+        assert condition == expected
+
+        spec = VersionSpec(condition.removeprefix("python"))
+        for full_version in self._FULL_VERSIONS:
+            marker_result = _marker_evaluates(f'python_version {comparator} "3"', full_version)
+            assert spec.matches(Version(full_version)) == marker_result, full_version
+
+
+class TestPythonVersionZeroPaddedMicroLiteral:
+    """A micro-pinned literal whose patch segment is `0` (e.g. `"3.5.0"`)
+    is PEP 440-equivalent to bare `"3.5"` for the same trailing-zero
+    reason as `TestPythonVersionBareMajorLiteral` -- `packaging`'s marker
+    evaluation treats them identically for every comparator, so the
+    matchspec must be identical too (the *existing* major.minor table
+    entry, unchanged).
+    """
+
+    _FULL_VERSIONS = ["3.4.9", "3.5.0", "3.5.1", "3.5.9", "3.6.0a0", "3.6.0"]
+
+    @pytest.mark.parametrize(
+        ("comparator", "expected"),
+        [
+            ("==", "python>=3.5.0a0,<3.6.0a0"),
+            ("!=", "python!=3.5.*"),
+            (">=", "python>=3.5.0a0"),
+            (">", "python>=3.6.0a0"),
+            ("<=", "python<3.6.0a0"),
+            ("<", "python<3.5.0a0"),
+        ],
+    )
+    def test_matchspec_matches_the_marker_for_every_full_version(
+        self, comparator: str, expected: str
+    ) -> None:
+        condition = marker_condition(parse(f'python_version {comparator} "3.5.0"'))
+        assert condition == expected
+
+        spec = VersionSpec(condition.removeprefix("python"))
+        for full_version in self._FULL_VERSIONS:
+            marker_result = _marker_evaluates(f'python_version {comparator} "3.5.0"', full_version)
+            assert spec.matches(Version(full_version)) == marker_result, full_version
+
+
+class TestPythonVersionNonzeroMicroLiteralOrderedComparators:
+    """A micro-pinned literal with a *nonzero* patch segment (e.g.
+    `"3.5.2"`) can never equal `python_version`, which is always exactly
+    major.minor -- so an ordered comparator's result no longer depends on
+    the literal's patch digit at all, only on which side of the literal's
+    major.minor its own major.minor falls. That collapses each comparator
+    pair onto the *other* comparator's existing major.minor table entry:
+    `>=` and `>` both behave like plain `>` against `"3.5"`, and `<=` and
+    `<` both behave like plain `<=` against `"3.5"` (verified against
+    `packaging`'s marker evaluation below). `==`/`!=` don't collapse onto
+    an existing entry at all -- see
+    `TestPythonVersionNonzeroMicroLiteralEquality`.
+    """
+
+    _FULL_VERSIONS = ["3.4.9", "3.5.0", "3.5.1", "3.5.9", "3.6.0a0", "3.6.0"]
+
+    @pytest.mark.parametrize(
+        ("comparator", "expected"),
+        [
+            (">=", "python>=3.6.0a0"),
+            (">", "python>=3.6.0a0"),
+            ("<=", "python<3.6.0a0"),
+            ("<", "python<3.6.0a0"),
+        ],
+    )
+    def test_matchspec_matches_the_marker_for_every_full_version(
+        self, comparator: str, expected: str
+    ) -> None:
+        condition = marker_condition(parse(f'python_version {comparator} "3.5.2"'))
+        assert condition == expected
+
+        spec = VersionSpec(condition.removeprefix("python"))
+        for full_version in self._FULL_VERSIONS:
+            marker_result = _marker_evaluates(f'python_version {comparator} "3.5.2"', full_version)
+            assert spec.matches(Version(full_version)) == marker_result, full_version
+
+
+class TestPythonVersionNonzeroMicroLiteralEquality:
+    """`python_version == "3.5.2"` is unconditionally `False`, and
+    `python_version != "3.5.2"` is unconditionally `True`, for *every*
+    python version -- `python_version` can never carry a nonzero third
+    release segment, so equality against a literal that has one can never
+    hold. Unlike the ordered comparators
+    (`TestPythonVersionNonzeroMicroLiteralOrderedComparators`), a constant
+    True/False can't be written as a `python<op>version` matchspec
+    fragment, so this is a ground-truth fact about the marker itself
+    (checked directly against `packaging.markers.Marker`) rather than a
+    test of a specific conversion -- `marker_condition` raises
+    `UnconvertablePythonVersionEqualityError` for this case instead of
+    representing it (see
+    `TestPythonVersion.test_nonzero_micro_equality_literal_raises_its_own_error`),
+    so its real-world frequency can be measured before deciding whether a
+    constant-folding representation is worth building.
+    """
+
+    _FULL_VERSIONS = ["3.4.9", "3.5.0", "3.5.1", "3.5.9", "3.6.0a0", "3.6.0"]
+
+    def test_equality_is_unconditionally_false(self) -> None:
+        for full_version in self._FULL_VERSIONS:
+            assert _marker_evaluates('python_version == "3.5.2"', full_version) is False
+
+    def test_inequality_is_unconditionally_true(self) -> None:
+        for full_version in self._FULL_VERSIONS:
+            assert _marker_evaluates('python_version != "3.5.2"', full_version) is True
+
+
+class TestPythonVersionMajorGlobLiteral:
+    """`python_version == "3.*"` (a bare-major PEP 440 prefix glob) is a
+    well-formed marker meaning "any Python 3.y" -- `packaging`'s own
+    marker evaluation resolves the glob via `Specifier`, exactly as it
+    would for any other `python_version` comparison. The matchspec
+    produced for it must reproduce that evaluation for every real (full)
+    python version, the same way `TestPythonVersionBareMajorLiteral`
+    checks the plain bare-major case.
+    """
+
+    _FULL_VERSIONS = ["2.7.18", "3.0.0", "3.5.9", "3.9.5", "3.10.0", "4.0.0"]
+
+    @pytest.mark.parametrize(
+        ("comparator", "expected"),
+        [("==", "python=3"), ("!=", "python!=3.*")],
+    )
+    def test_matchspec_matches_the_marker_for_every_full_version(
+        self, comparator: str, expected: str
+    ) -> None:
+        condition = marker_condition(parse(f'python_version {comparator} "3.*"'))
+        assert condition == expected
+
+        spec = VersionSpec(condition.removeprefix("python"))
+        for full_version in self._FULL_VERSIONS:
+            marker_result = _marker_evaluates(f'python_version {comparator} "3.*"', full_version)
+            assert spec.matches(Version(full_version)) == marker_result, full_version
+
+    @pytest.mark.parametrize("literal", ["3.x.*", "3.9.*"])
+    def test_non_bare_major_glob_raises(self, literal: str) -> None:
+        """A glob whose prefix isn't parseable at all (`"3.x.*"`), or is
+        parseable but has more than one release segment (`"3.9.*"`), is
+        not the bare-major shape this class handles -- unlike a bare
+        major glob, matchspec's fuzzy match can't represent a
+        minor-or-deeper glob the same way a plain comparison would (see
+        `_python_version_major_glob`), so it isn't attempted here.
+        """
+        with pytest.raises(UnconvertableMarkerError, match="python_version"):
+            marker_condition(parse(f'python_version == "{literal}"'))
+
+
 class TestPythonFullVersion:
     @pytest.mark.parametrize(
         ("comparator", "matchspec_comparator"),
@@ -89,6 +296,80 @@ class TestPythonFullVersion:
     def test_unsupported_comparator_raises(self, marker: str) -> None:
         with pytest.raises(UnconvertableMarkerError, match="python_full_version"):
             marker_condition(parse(marker))
+
+
+class TestFullVersionGlobLiteral:
+    """`python_full_version == "X.Y.*"` shows up in real wheels (e.g.
+    cibuildwheel-style per-minor pins), but isn't in docs/matchspec.md's
+    marker table, which only covers a plain `"X.Y.Z"` literal. The current
+    passthrough (`format_version_literal` can't parse `"3.8.*"` as a
+    `Version`, so it falls through unchanged) produces `python==3.8.*`,
+    which py-rattler's `MatchSpec` rejects -- confirmed against a real
+    corpus of published wheels, where this exact shape (`numpy`, `zarr`,
+    `importlib-metadata`, `pytest`, ... constrained to one Python minor)
+    accounts for 1,815 of reroll's "not a valid matchspec" failures.
+    """
+
+    def test_equality_glob_literal_is_rewritten_to_the_fuzzy_form(self) -> None:
+        """Mirrors docs/matchspec.md's Operator conversion rule for a
+        plain specifier (`==X.Y.*` becomes `=X.Y`) -- matchspec disallows
+        `==` combined with a glob regardless of where the glob came from.
+        """
+        assert marker_condition(parse('python_full_version == "3.8.*"')) == "python=3.8"
+
+    def test_inequality_glob_literal_passes_through_unchanged(self) -> None:
+        """Per docs/matchspec.md, prefix *exclusion* needs no rewrite."""
+        assert marker_condition(parse('python_full_version != "3.8.*"')) == "python!=3.8.*"
+
+    def test_glob_literal_whose_prefix_is_not_a_version_passes_through_unchanged(self) -> None:
+        """A `.*`-suffixed literal only counts as a prefix-match glob if
+        the part before `.*` itself parses as a version -- otherwise it's
+        treated like any other unparseable literal (passed through
+        unchanged), the same as before this class's rewrite existed.
+        """
+        assert marker_condition(parse('python_full_version == "3.x.*"')) == "python==3.x.*"
+
+    @pytest.mark.parametrize(
+        "full_version",
+        [
+            "3.8.0",
+            "3.8.1",
+            "3.8.10",
+            "3.8.99",
+            "3.7.9",
+            "3.9.0",
+            "3.10.0",
+            "3.80.0",
+            "3.8.0rc1",
+            "3.8.0b1",
+            "3.8.0.dev1",
+            "3.8",
+            "3.8.0.post1",
+        ],
+    )
+    def test_fuzzy_matchspec_agrees_with_packagings_own_glob_evaluation(
+        self, full_version: str
+    ) -> None:
+        """`python=3.8` is only the right translation of
+        `python_full_version == "3.8.*"` if it agrees, for every concrete
+        interpreter version the marker could actually be evaluated
+        against, with how `packaging` itself (not `markerpry`, which never
+        evaluates a marker, only converts its syntax) resolves that glob
+        via `Specifier("==3.8.*").contains(...)`.
+
+        `3.80.0` is the case that would catch a naive string-prefix
+        implementation on either side: it starts with the characters
+        `"3.8"` but is a different minor version, so both `packaging` and
+        rattler's fuzzy match must reject it by comparing release
+        segments, not string prefixes.
+        """
+        marker = Marker('python_full_version == "3.8.*"')
+        packaging_says = marker.evaluate({"python_full_version": full_version})
+
+        conda_version = format_version(PypiVersion(full_version))
+        matchspec_says = VersionSpec("=3.8").matches(Version(conda_version))
+
+        assert packaging_says == matchspec_says
 
 
 class TestVirtualPackages:

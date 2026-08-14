@@ -615,6 +615,151 @@ class TestMinorRange:
         with pytest.raises(InvalidPythonRequirementRangeError, match="not a contiguous"):
             minor_range(SpecifierSet("<3.0"))
 
+    # ----------------------------------------------------------------------
+    # Micro-level boundaries that fall strictly inside a minor -- real
+    # `Requires-Python` values (unlike a wheel filename's own tag, which is
+    # always minor-aligned) can have these, and a minor is still "in range"
+    # if *any* of its patch releases satisfy the specifiers, not just its
+    # `.0` release.
+    # ----------------------------------------------------------------------
+
+    def test_lower_bound_mid_minor_still_counts_that_minor(self) -> None:
+        """`>=3.9.16` doesn't satisfy `3.9.0`, but 3.9.16 and every later
+        3.9.x release still make minor 9 the correct floor.
+        """
+        assert minor_range(SpecifierSet(">=3.9.16")) == (9, None)
+
+    def test_upper_bound_mid_minor_still_counts_that_minor(self) -> None:
+        """`<3.9.5` excludes `3.9.5` onward, but 3.9.0-3.9.4 still make
+        minor 9 the correct (inclusive) top of the range.
+        """
+        assert minor_range(SpecifierSet(">=3.5,<3.9.5")) == (5, 10)
+
+    def test_lower_bound_exactly_at_minor_start_is_unaffected(self) -> None:
+        assert minor_range(SpecifierSet(">=3.9.0")) == (9, None)
+
+    def test_exclusive_lower_bound_just_above_minor_start_still_counts_it(self) -> None:
+        """`>3.9.0` excludes only the single `3.9.0` release; `3.9.1`
+        onward still satisfies, so minor 9 is still the floor.
+        """
+        assert minor_range(SpecifierSet(">3.9.0")) == (9, None)
+
+    def test_exclusive_upper_bound_exactly_at_minor_start_excludes_it(self) -> None:
+        """`<3.9.0` excludes every 3.9.x release outright (unlike
+        `<3.9.5`), so minor 9 is correctly not part of the range.
+        """
+        assert minor_range(SpecifierSet(">=3.5,<3.9.0")) == (5, 9)
+
+    def test_inclusive_upper_bound_mid_minor_still_counts_that_minor(self) -> None:
+        assert minor_range(SpecifierSet(">=3.5,<=3.9.5")) == (5, 10)
+
+    def test_single_patch_exclusion_does_not_remove_the_minor(self) -> None:
+        """`!=3.9.7` only excludes that one release; every other 3.9.x
+        release still satisfies, unlike a wildcard exclusion.
+        """
+        assert minor_range(SpecifierSet(">=3.8,!=3.9.7,<3.12")) == (8, 12)
+
+    def test_micro_level_floor_and_ceiling_in_the_same_minor(self) -> None:
+        """Both bounds land inside minor 9 without touching its `.0`
+        release on either end; 9 is still the sole satisfying minor.
+        """
+        assert minor_range(SpecifierSet(">=3.9.16,<3.9.99")) == (9, 10)
+
+    def test_compatible_release_with_patch_component(self) -> None:
+        """`~=3.9.5` means `>=3.9.5,==3.9.*` -- floor lands mid-minor 9,
+        ceiling is the aligned start of minor 10.
+        """
+        assert minor_range(SpecifierSet("~=3.9.5")) == (9, 10)
+
+    def test_compatible_release_without_patch_component(self) -> None:
+        """`~=3.9` means `>=3.9,==3.*` -- an open floor at minor 9, same
+        shape as `>=3.9,<4`.
+        """
+        assert minor_range(SpecifierSet("~=3.9")) == (9, None)
+
+    def test_unparseable_legacy_equality_clause_is_ignored_as_an_anchor(self) -> None:
+        """`===notaversion` (PEP 440 arbitrary equality) isn't a real
+        `Version` once its trailing `.*` (absent here) is stripped, so it
+        contributes no extra probe micros -- but it still applies as a
+        real constraint, which no `3.x.y` release satisfies, matching no
+        minor at all.
+        """
+        with pytest.raises(InvalidPythonRequirementRangeError, match="not a contiguous"):
+            minor_range(SpecifierSet("===notaversion"))
+
+    # ----------------------------------------------------------------------
+    # Pre-release (alpha/beta/rc/dev) bounds -- e.g. a package pinned to a
+    # Python beta during a preview cycle. `Version` comparison already
+    # orders these below their own final release, so no dedicated
+    # prerelease-aware probing is needed, but the shape is worth pinning
+    # down explicitly since it's a distinct, real `Requires-Python` input.
+    # ----------------------------------------------------------------------
+
+    def test_prerelease_floor_at_a_minors_start(self) -> None:
+        """`>=3.13.0b1` is satisfied by final `3.13.0` (a final release
+        always sorts after its own beta), so minor 13's `.0` baseline
+        probe alone already finds it -- no different from `>=3.13`.
+        """
+        assert minor_range(SpecifierSet(">=3.13.0b1")) == (13, None)
+
+    def test_prerelease_floor_mid_minor(self) -> None:
+        """`>=3.9.5b1` is not satisfied by `3.9.0`, but final `3.9.5`
+        onward does satisfy it -- the same mid-minor-floor handling as a
+        plain `>=3.9.5`, just anchored at a prerelease version.
+        """
+        assert minor_range(SpecifierSet(">=3.9.5b1")) == (9, None)
+
+    def test_prerelease_ceiling_mid_minor(self) -> None:
+        """`<3.9.5rc1` still leaves `3.9.0`-`3.9.4` satisfying, so minor 9
+        is still included -- a prerelease ceiling doesn't behave any
+        differently from a plain micro-level one.
+        """
+        assert minor_range(SpecifierSet(">=3.5,<3.9.5rc1")) == (5, 10)
+
+    def test_prerelease_exclusion_does_not_remove_the_minor(self) -> None:
+        """`!=3.9.0rc1` excludes only that one prerelease; every actual
+        release in minor 9 (final `3.9.0` included) still satisfies.
+        """
+        assert minor_range(SpecifierSet(">=3.8,!=3.9.0rc1,<3.12")) == (8, 12)
+
+    # ----------------------------------------------------------------------
+    # Multiple/adjacent `!=` hole exclusions.
+    # ----------------------------------------------------------------------
+
+    def test_multiple_single_patch_exclusions_in_one_minor_still_satisfied(self) -> None:
+        """Two separate patch-level exclusions in the same minor still
+        leave other 3.9.x releases satisfying it, same as one.
+        """
+        assert minor_range(SpecifierSet(">=3.8,!=3.9.1,!=3.9.2,<3.12")) == (8, 12)
+
+    def test_hole_exactly_at_a_mid_minor_floors_anchor_still_counts_it(self) -> None:
+        """`!=3.9.16` excludes exactly the version `>=3.9.16` would
+        otherwise start at, but `3.9.17` onward still satisfies both, so
+        minor 9 is still the floor.
+        """
+        assert minor_range(SpecifierSet(">=3.9.16,!=3.9.16")) == (9, None)
+
+    def test_consecutive_exclusions_past_a_mid_minor_floor_still_satisfied(self) -> None:
+        """Excluding the first two patches past a mid-minor floor still
+        leaves later patches in the same minor satisfying it.
+        """
+        assert minor_range(SpecifierSet(">=3.9.16,!=3.9.17,!=3.9.18")) == (9, None)
+
+    def test_two_separate_full_minor_exclusions_is_rejected(self) -> None:
+        """`!=3.7.*` and `!=3.9.*` carve two separate holes out of an
+        otherwise-open range -- still not representable as one
+        `(floor, ceiling)` pair, same as a single hole.
+        """
+        with pytest.raises(InvalidPythonRequirementRangeError, match="not a contiguous"):
+            minor_range(SpecifierSet(">=3.6,!=3.7.*,!=3.9.*,<3.11"))
+
+    def test_two_adjacent_full_minor_exclusions_is_rejected(self) -> None:
+        """`!=3.7.*,!=3.8.*` together carve out two consecutive minors --
+        still a gap, not a shifted floor.
+        """
+        with pytest.raises(InvalidPythonRequirementRangeError, match="not a contiguous"):
+            minor_range(SpecifierSet(">=3.6,!=3.7.*,!=3.8.*,<3.10"))
+
 
 # --------------------------------------------------------------------------
 # `platform_version`

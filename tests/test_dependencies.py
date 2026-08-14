@@ -208,6 +208,61 @@ class TestRequiresPythonTightening:
 
 
 # --------------------------------------------------------------------------
+# `python_dependencies`: `Requires-Python` with a micro-level bound that
+# falls strictly inside a minor -- unlike a wheel filename's own tag
+# (always minor-aligned), a real `Requires-Python` value can have one.
+# --------------------------------------------------------------------------
+
+
+class TestRequiresPythonMicroLevelBoundaries:
+    def test_micro_level_floor_within_pinned_minor_is_not_a_false_mismatch(self) -> None:
+        """The exact shape reported in the v0.1.1 failure analysis:
+        `cp39` implies `>=3.9,<3.10.0a0`, and `Requires-Python >=3.9.16`
+        does intersect it (3.9.16 through the rest of 3.9.x) even though
+        `3.9.0` itself doesn't satisfy `>=3.9.16`.
+        """
+        config = _config(interpreter="cp39", abi="cp39")
+
+        assert python_dependencies(config, _metadata(requires_python=">=3.9.16")) == (
+            "python >=3.9,<3.10.0a0",
+        )
+
+    def test_micro_level_floor_genuinely_past_pinned_minor_still_mismatches(self) -> None:
+        """A micro-level floor that lands in the *next* minor is a real
+        mismatch, not a false positive -- `3.9.x` never satisfies
+        `>=3.10.1`.
+        """
+        config = _config(interpreter="cp39", abi="cp39")
+
+        with pytest.raises(PythonRangeMismatchError):
+            python_dependencies(config, _metadata(requires_python=">=3.10.1"))
+
+    def test_micro_level_floor_tightens_a_pure_python_floor_correctly(self) -> None:
+        """A pure-python wheel's open floor (minor 8+) tightened against a
+        `Requires-Python` whose floor sits mid-minor-9: the result must
+        still start at minor 9, not be pushed to minor 10 by a floor
+        computed off `3.9.0` alone.
+        """
+        config = _config(interpreter="py38", abi="none")
+
+        assert python_dependencies(config, _metadata(requires_python=">=3.9.16,<3.11")) == (
+            "python >=3.9,<3.11.0a0",
+        )
+
+    def test_micro_level_floor_and_ceiling_both_inside_the_pinned_minor(self) -> None:
+        """Both `Requires-Python` bounds fall inside minor 9 without
+        touching its `.0` release on either side; the pinned minor-9
+        wheel still intersects it, rendered the same as an untightened
+        pin since a MatchSpec can't express sub-minor precision.
+        """
+        config = _config(interpreter="cp39", abi="cp39")
+
+        assert python_dependencies(config, _metadata(requires_python=">=3.9.16,<3.9.99")) == (
+            "python >=3.9,<3.10.0a0",
+        )
+
+
+# --------------------------------------------------------------------------
 # `python_dependencies`: an unexploded `abi3`/`abi3t` tag reaching this
 # layer is a reroll bug, not a caller error (docs/wheel_to_conda_dependencies.md's
 # "Wheel is a compiled wheel for a CPython floor, and abi3 or abi3t").

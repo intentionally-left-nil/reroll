@@ -12,6 +12,7 @@ from reroll.dependencies.pep508_to_matchspec import pep508_to_matchspec
 from reroll.errors import (
     InvalidRequirementError,
     UnconvertableMarkerError,
+    UnconvertablePythonVersionEqualityError,
     UnconvertableRequirementError,
     UnresolvedCondaNameError,
 )
@@ -529,6 +530,21 @@ class TestMarkers:
             pep508_to_matchspec(entry, (aggregator_mapper,)) == 'requests[when="python>=3.9.0.rc1"]'
         )
 
+    def test_full_version_glob_marker_produces_a_rattler_valid_when_clause(self) -> None:
+        """`python_full_version == "X.Y.*"` isn't in docs/matchspec.md's
+        marker table, and the current passthrough emits `python==X.Y.*`,
+        which py-rattler's `MatchSpec` rejects as invalid (`==` combined
+        with a glob). Real-world corpus data shows this exact shape --
+        real dependencies (`numpy`, `zarr`, `importlib-metadata`,
+        `pytest`, ...) pinned to one Python minor -- is the majority
+        (1,815 of 2,232) of reroll's "not a valid matchspec" failures.
+        """
+        entry = 'numpy<1.25.0,>=1.24.0; python_full_version == "3.8.*"'
+
+        assert pep508_to_matchspec(entry, (aggregator_mapper,)) == (
+            'numpy <1.25.0,>=1.24.0[when="python=3.8"]'
+        )
+
     def test_extras_and_marker_combine_in_one_bracket(self) -> None:
         entry = 'fastapi[all]>=1.0; sys_platform == "win32"'
 
@@ -612,19 +628,25 @@ class TestMarkers:
 
     def test_python_version_literal_with_a_patch_segment_raises(self) -> None:
         """`python_version` markers are documented as major.minor only; a
-        literal with a patch segment (a common real-world mistake) is
-        rejected rather than silently misinterpreted.
+        literal with a nonzero patch segment (a common real-world mistake)
+        raises its own dedicated error, `UnconvertablePythonVersionEqualityError`,
+        rather than the generic `UnconvertableMarkerError`.
         """
         entry = 'requests>=2.0.0; python_version == "3.9.1"'
 
-        with pytest.raises(UnconvertableMarkerError, match="major.minor"):
+        with pytest.raises(UnconvertablePythonVersionEqualityError, match="major.minor"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
-    def test_python_version_literal_with_only_a_major_segment_raises(self) -> None:
+    def test_python_version_literal_with_only_a_major_segment_converts(self) -> None:
+        """A bare-major literal (`"3"`) is PEP 440-equivalent to `"3.0"`
+        (trailing zero release segments are insignificant), so it converts
+        exactly as `python_version == "3.0"` would.
+        """
         entry = 'requests>=2.0.0; python_version == "3"'
 
-        with pytest.raises(UnconvertableMarkerError, match="major.minor"):
-            pep508_to_matchspec(entry, (aggregator_mapper,))
+        assert pep508_to_matchspec(entry, (aggregator_mapper,)) == (
+            'requests >=2.0.0[when="python>=3.0.0a0,<3.1.0a0"]'
+        )
 
     def test_python_version_rejects_the_compatible_release_comparator(self) -> None:
         entry = 'requests>=2.0.0; python_version ~= "3.9"'

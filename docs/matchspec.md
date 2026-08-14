@@ -83,7 +83,7 @@ This needs to be translated into the conda-equivalent matchspec `fastapi[extras=
 Here's what each environment marker variable means, which gives the [Marker to matchspec conversion](#marker-to-matchspec-conversion) table below the context for which ones can convert to a MatchSpec, and which can't.
 
 ## python_version
-This is the major.minor (not patch) version (`3.13`, not `3.13.X`).
+This is the major.minor (not patch) version (`3.13`, not `3.13.X`)
 
 ## python_full_version / implementation_version
 `python_full_version` is the same value as `python_version`, but also including the patch (3.13.0). Many actual uses of this in wheel markers are not patch-specific, but should be using python_version instead. Perhaps the legitimate case would be if something were specifically targeting a beta patch level like `3.13.2b`
@@ -181,3 +181,13 @@ However, rattler-py doesn't support a leading `*` for the version field (this ma
 
 Until this is fixed, we will NOT support `in/not in` with matchspec. Instead, the conversion code raises `UnconvertableMarkerError` if that is present.
 Potentially this could be worked around for python_version by means of exhaustive expansion of the possibilties, pre-computing the actual matches, and then selecting those. However that's a lot of work and so the initial decision is just to not allow `in/not in`
+
+## python_version Major, minor, and patch comparisons
+`python_version`'s own value is always exactly major.minor (`"3.9"`, never `"3.9.2"`). The literal on the other side of the comparison is just a string the wheel author wrote; PEP 440 decides what it means once it's compared as a version, not as a string.
+
+PEP 440 treats trailing zeros are insignificant, so `3.9.0` behaves the same as `3.9`and a bare `3` behaves the same as `3.0`, *not* "any 3.x".
+PEP 440's treats a trailing * as a wildcard, but only valid with == and !==.
+
+On the matchspec side, `==` and a glob can't mix per CEP-29. Instead, `==X.Y.*` must be rewritten as  `=X.Y`. Similarly, `==3.*` must be rewritten as `=3`
+
+For patches, the behavior changes yet again. `python_version == 3.8.2` (any non-zero patch) cannot be equal given pep semantics, so it is universally falsey. (!= would be universally true). This can't be converted to matchspec because "universally false" or "universally true" is not a valid matchspec fragment. Instead, at the matchspec level, all we can do is detect this and raise a UnconvertablePythonVersionEqualityError. It is up to a caller to reduce this fragment to false before calling to_matchspec

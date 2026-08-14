@@ -71,8 +71,8 @@ def reroll(
     `reroll.stages.get_wheel_records`, in that order).
 
     `mappers` defaults to `default_mappers()` -- the chain of grayskull,
-    conda-lock, and parselmouth mappers, aggregated by `aggregator_mapper`
-    -- when not given explicitly.
+    conda-lock, the hand-maintained overrides table, and parselmouth
+    mappers, aggregated by `aggregator_mapper` -- when not given explicitly.
 
     `sha256`, `size`, and `url` are never computed from `path` -- each is
     set on every returned record only if passed in here (docs/wheel_record.md).

@@ -21,6 +21,8 @@ _TABLE = {
     "pyplaid": "plaid",
     "simhash-py": "simhash-py",
     "grip-nulling": "grip-nulling",
+    "functools32": "functools32",
+    "pyqtchart": "pyqtchart",
 }
 
 

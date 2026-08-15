@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict
 from reroll.dependencies.conditional_dependency import conditional_dependency
 from reroll.dependencies.extras import find_extras
 from reroll.dependencies.glibc import glibc_dependency
+from reroll.dependencies.osx import osx_dependency
 from reroll.dependencies.pep508_to_matchspec import pep508_to_matchspec
 from reroll.dependencies.python import python_dependencies, python_range
 from reroll.dependencies.requires_dist import strip_interpreter_requirements
@@ -69,7 +70,8 @@ def calculate_dependencies(
     `python`/`python_abi` (`reroll.dependencies.python.python_dependencies`)
     are appended to `depends` last, matching real conda-pypi output's field
     order, followed by `__glibc` (`reroll.dependencies.glibc.glibc_dependency`)
-    for a manylinux wheel.
+    for a manylinux wheel or `__osx` (`reroll.dependencies.osx.osx_dependency`)
+    for a macOS wheel.
 
     `abi3_upper_bound` bounds a residual `python_version in "<literal>"`
     marker's conversion (`reroll.dependencies.marker_conversion.marker_condition`)
@@ -118,6 +120,9 @@ def calculate_dependencies(
     glibc = glibc_dependency(config)
     if glibc is not None:
         depends.append(glibc)
+    osx = osx_dependency(config)
+    if osx is not None:
+        depends.append(osx)
     return WheelDependencies(
         depends=tuple(depends),
         extra_depends=_dedupe_extras(depends, extra_depends),

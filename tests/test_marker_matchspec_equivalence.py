@@ -222,20 +222,49 @@ class TestPythonVersionMembershipEquivalence:
         )
 
 
+class TestPythonVersionNotInMembershipEquivalence:
+    """`TestPythonVersionMembershipEquivalence`'s complement: `python_version
+    not in "<literal>"` rewrites to an `and`-chain of inequalities before
+    conversion.
+    """
+
+    @pytest.mark.parametrize("literal", ["3.8 3.9 3.13", "3.8,3.9,3.13", "3.8, 3.9, 3.13"])
+    def test_multi_value_list_agrees_with_pip_across_every_candidate(self, literal: str) -> None:
+        assert_matchspec_agrees_with_pip(
+            f'python_version not in "{literal}"',
+            _PYTHON_VERSION_CANDIDATES,
+            abi3_upper_bound="3.13",
+        )
+
+    def test_or_combination_agrees_with_pip_across_every_candidate(self) -> None:
+        marker = 'python_version not in "3.9 3.13" or python_version < "3.8"'
+        assert_matchspec_agrees_with_pip(
+            marker, _PYTHON_VERSION_CANDIDATES, abi3_upper_bound="3.13"
+        )
+
+
 class TestOracleItselfRejectsUnconvertableMarkers:
     """The oracle's `matchspec_condition` is a thin wrapper over
     `marker_condition` -- a marker that function can't convert at all must
     still raise, not silently produce a condition to (mis)compare.
     """
 
-    def test_not_in_still_raises(self) -> None:
-        with pytest.raises(UnconvertableMarkerError):
-            assert_matchspec_agrees_with_pip(
-                'python_version not in "3.11"', _PYTHON_VERSION_CANDIDATES, abi3_upper_bound="3.13"
-            )
-
-    def test_key_on_the_right_still_raises(self) -> None:
+    def test_key_on_the_right_in_still_raises(self) -> None:
         with pytest.raises(UnconvertableMarkerError):
             assert_matchspec_agrees_with_pip(
                 '"3.11" in python_version', _PYTHON_VERSION_CANDIDATES, abi3_upper_bound="3.13"
+            )
+
+    def test_key_on_the_right_not_in_still_raises(self) -> None:
+        with pytest.raises(UnconvertableMarkerError):
+            assert_matchspec_agrees_with_pip(
+                '"3.11" not in python_version', _PYTHON_VERSION_CANDIDATES, abi3_upper_bound="3.13"
+            )
+
+    def test_other_key_not_in_still_raises(self) -> None:
+        with pytest.raises(UnconvertableMarkerError):
+            assert_matchspec_agrees_with_pip(
+                'sys_platform not in "linux darwin"',
+                _PYTHON_VERSION_CANDIDATES,
+                abi3_upper_bound="3.13",
             )

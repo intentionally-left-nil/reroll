@@ -156,6 +156,11 @@ Manylinux has a modern version `manylinux_X_Y_{x86_64,aarch64}` where X and Y is
 
 These three variants correspond to a glibc floor of 2.5, 2.12, and 2.17 specifically. Once the correct glibc version is identified, the dependency generation code can correctly emit the `__glibc` dependency specifying the floor (not an exact version) of glibc required
 
+## macOS
+macOS wheels carry a `macosx_X_Y_{x86_64,arm64,universal2}` platform tag, where X.Y is the minimum macOS version (deployment target) the wheel supports.
+
+Apple Silicon (arm64) Macs did not exist before macOS 11.0 (Big Sur), so an arm64 config's floor is clamped to 11.0 even when the tag's own version is lower. This happens with the arm64 half of a `universal2` tag, whose stated version is really carried by the x86_64 half. The x86_64 half is never clamped.
+
 
 # Compressed tags
 Compressed tags allow a single wheel filename to indicate support for multiple platform tags, using periods.

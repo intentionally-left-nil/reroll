@@ -151,6 +151,11 @@ The `manylinux` flavors are interesting in the sense that they define the minimu
 
 The `musl` platform tags are out of scope for reroll right now, and may be revisited if conda ever supports these variants.
 
+## manylinux
+Manylinux has a modern version `manylinux_X_Y_{x86_64,aarch64}` where X and Y is the glibc major/minor floor, along with three older variants: `manylinux1`, `manylinux2010`, and `manylinux2014`.
+
+These three variants correspond to a glibc floor of 2.5, 2.12, and 2.17 specifically. Once the correct glibc version is identified, the dependency generation code can correctly emit the `__glibc` dependency specifying the floor (not an exact version) of glibc required
+
 
 # Compressed tags
 Compressed tags allow a single wheel filename to indicate support for multiple platform tags, using periods.

@@ -524,4 +524,5 @@ class TestWheelDependenciesPlatformSpecific:
             "requests ==1.0.0.rc1",
             "python >=3.13,<3.14.0a0",
             "python_abi 3.13.* *_cp313",
+            "__glibc >=2.17",
         )

@@ -359,10 +359,22 @@ class TestPlatformValidator:
         config = _config(platform="manylinux_2_17_aarch64", arch=Arch.ARM64)
         assert config.platform == "manylinux_2_17_aarch64"
 
-    @pytest.mark.parametrize("alias", ["manylinux1", "manylinux2010", "manylinux2014"])
-    def test_accepts_legacy_manylinux_aliases(self, alias: str) -> None:
-        config = _config(platform=f"{alias}_x86_64", arch=Arch.X86_64)
-        assert config.platform == f"{alias}_x86_64"
+    @pytest.mark.parametrize(
+        ("alias", "arch_suffix", "arch"),
+        [
+            ("manylinux1", "x86_64", Arch.X86_64),
+            ("manylinux1", "aarch64", Arch.ARM64),
+            ("manylinux2010", "x86_64", Arch.X86_64),
+            ("manylinux2010", "aarch64", Arch.ARM64),
+            ("manylinux2014", "x86_64", Arch.X86_64),
+            ("manylinux2014", "aarch64", Arch.ARM64),
+        ],
+    )
+    def test_accepts_legacy_manylinux_aliases(
+        self, alias: str, arch_suffix: str, arch: Arch
+    ) -> None:
+        config = _config(platform=f"{alias}_{arch_suffix}", arch=arch)
+        assert config.platform == f"{alias}_{arch_suffix}"
 
     @pytest.mark.parametrize("arch_tag", ["x86_64", "arm64", "universal2"])
     def test_accepts_macos_arches(self, arch_tag: str) -> None:
@@ -783,6 +795,10 @@ class TestPlatformVersion:
         config = _config(platform="manylinux2014_x86_64", arch=Arch.X86_64)
 
         assert config.platform == "manylinux2014_x86_64"
+        assert config.platform_version == (2, 17)
+
+    def test_legacy_alias_aarch64_reads_the_same_mapped_version_as_x86_64(self) -> None:
+        config = _config(platform="manylinux2014_aarch64", arch=Arch.ARM64)
         assert config.platform_version == (2, 17)
 
     def test_macos_x86_64_reads_tag_version(self) -> None:

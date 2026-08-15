@@ -52,6 +52,7 @@ def calculate_dependencies(
     *,
     subdir: CondaSubdir | None,
     allow_pre: bool = False,
+    abi3_upper_bound: str | None = None,
 ) -> WheelDependencies:
     """`metadata.requires_dist`'s conda dependencies for one target
     environment: `subdir=None` for a noarch record, or one specific
@@ -69,6 +70,12 @@ def calculate_dependencies(
     are appended to `depends` last, matching real conda-pypi output's field
     order, followed by `__glibc` (`reroll.dependencies.glibc.glibc_dependency`)
     for a manylinux wheel.
+
+    `abi3_upper_bound` bounds a residual `python_version in "<literal>"`
+    marker's conversion (`reroll.dependencies.marker_conversion.marker_condition`)
+    the same way it bounds `explode_abi3`'s tag explosion -- `None` (the
+    default) defers to `latest_python_minor`, lazily, and only if some
+    entry's marker actually needs it.
 
     Raises `reroll.errors.PythonRangeMismatchError` if `config`'s
     filename-implied Python range and `metadata.requires_python` don't
@@ -102,6 +109,7 @@ def calculate_dependencies(
                 subdir=subdir,
                 mappers=mappers,
                 allow_pre=allow_pre,
+                abi3_upper_bound=abi3_upper_bound,
             )
             if matchspec is not None:
                 target.append(matchspec)
@@ -124,6 +132,7 @@ def _entry_dependency(
     subdir: CondaSubdir | None,
     mappers: NameMappers,
     allow_pre: bool,
+    abi3_upper_bound: str | None,
 ) -> str | None:
     """`entry`'s MatchSpec for `extra`'s environment, or `None` if
     `entry`'s marker rules it out entirely.
@@ -137,7 +146,9 @@ def _entry_dependency(
         return None
     bare_entry = _bare_entry(requirement)
     final_entry = bare_entry if residual == "" else f"{bare_entry}; {residual}"
-    return pep508_to_matchspec(final_entry, mappers, allow_pre=allow_pre)
+    return pep508_to_matchspec(
+        final_entry, mappers, allow_pre=allow_pre, abi3_upper_bound=abi3_upper_bound
+    )
 
 
 def _bare_entry(requirement: Requirement) -> str:

@@ -27,9 +27,16 @@ def pep508_to_matchspec(
     mappers: NameMappers,
     *,
     allow_pre: bool = False,
+    abi3_upper_bound: str | None = None,
 ) -> str:
     """The conda MatchSpec for `entry`, a single PEP 508 requirement string
     (a `Requires-Dist` entry).
+
+    `abi3_upper_bound` bounds `marker_condition`'s `python_version in
+    "<literal>"` rewrite the same way it bounds `explode_abi3`'s tag
+    explosion -- a minor-only version string like `"3.15"`; `None` (the
+    default) defers to `latest_python_minor`, lazily, and only if `entry`'s
+    marker actually has such a clause.
 
     Raises `UnconvertableRequirementError` for anything that can't be
     converted: a direct URL reference (`name @ url`); a local version label
@@ -41,9 +48,10 @@ def pep508_to_matchspec(
     condition isn't implemented here); or an assembled MatchSpec string
     that fails py-rattler's own validation. Also raises
     `InvalidRequirementError` if `entry` itself does not parse as a PEP 508
-    requirement, `reroll.errors.UnconvertableMarkerError` for a marker
-    using a construct that has no matchspec equivalent, and
-    `reroll.errors.UnresolvedCondaNameError` for a PyPI name with no
+    requirement, `reroll.errors.UnconvertableMarkerError` or
+    `reroll.errors.UnconvertablePythonVersionEqualityError` for a marker
+    using a construct that has no matchspec equivalent (`marker_condition`),
+    and `reroll.errors.UnresolvedCondaNameError` for a PyPI name with no
     resolvable conda name.
     """
     try:
@@ -72,7 +80,8 @@ def pep508_to_matchspec(
     if extras:
         brackets.append(_format_extras(extras))
     if marker_node is not None:
-        brackets.append(f'when="{_marker_condition(marker_node, entry)}"')
+        condition = _marker_condition(marker_node, entry, abi3_upper_bound=abi3_upper_bound)
+        brackets.append(f'when="{condition}"')
 
     name_and_version = (
         conda_name if not version_parts else f"{conda_name} {','.join(version_parts)}"
@@ -200,16 +209,16 @@ def _format_extras(extras: set[NormalizedName]) -> str:
     return f"extras=[{','.join(sorted(extras))}]"
 
 
-def _marker_condition(marker_node: Node, entry: str) -> str:
-    """`marker_condition(marker_node)`, with `entry` folded into the
-    message on failure.
+def _marker_condition(marker_node: Node, entry: str, *, abi3_upper_bound: str | None) -> str:
+    """`marker_condition(marker_node, abi3_upper_bound=abi3_upper_bound)`,
+    with `entry` folded into the message on failure.
 
     Reraises the same `UnconvertableMarkerError` instance rather than
     constructing a new one: that error already logged itself at
     construction, and a fresh instance would log the one failure twice.
     """
     try:
-        return marker_condition(marker_node)
+        return marker_condition(marker_node, abi3_upper_bound=abi3_upper_bound)
     except UnconvertableMarkerError as exc:
         exc.args = (f"cannot convert the marker in {entry!r} to a matchspec: {exc}",)
         raise

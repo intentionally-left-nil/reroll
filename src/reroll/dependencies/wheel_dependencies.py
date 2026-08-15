@@ -21,6 +21,7 @@ def wheel_dependencies(
     mappers: NameMappers,
     *,
     allow_pre: bool = False,
+    abi3_upper_bound: str | None = None,
 ) -> dict[CondaSubdir | None, WheelDependencies]:
     """`config`/`metadata`'s conda dependencies, one `WheelDependencies`
     per target the resulting repodata record(s) need.
@@ -32,6 +33,8 @@ def wheel_dependencies(
     raises `NeedsArchSplitError` for that noarch attempt
     (docs/wheel_to_conda_dependencies.md's noarch decision), in which case
     it is retried once per `CondaSubdir` instead.
+
+    `abi3_upper_bound` is passed straight through to `calculate_dependencies`.
 
     Raises `reroll.errors.UnsupportedPlatformError` if `config.platform`
     is not one reroll supports.
@@ -46,19 +49,34 @@ def wheel_dependencies(
     if not subdirs:
         try:
             noarch = calculate_dependencies(
-                config, metadata, mappers, subdir=None, allow_pre=allow_pre
+                config,
+                metadata,
+                mappers,
+                subdir=None,
+                allow_pre=allow_pre,
+                abi3_upper_bound=abi3_upper_bound,
             )
         except NeedsArchSplitError:
             return {
                 subdir: calculate_dependencies(
-                    config, metadata, mappers, subdir=subdir, allow_pre=allow_pre
+                    config,
+                    metadata,
+                    mappers,
+                    subdir=subdir,
+                    allow_pre=allow_pre,
+                    abi3_upper_bound=abi3_upper_bound,
                 )
                 for subdir in CondaSubdir
             }
         return {None: noarch}
     return {
         subdir: calculate_dependencies(
-            config, metadata, mappers, subdir=subdir, allow_pre=allow_pre
+            config,
+            metadata,
+            mappers,
+            subdir=subdir,
+            allow_pre=allow_pre,
+            abi3_upper_bound=abi3_upper_bound,
         )
         for subdir in subdirs
     }

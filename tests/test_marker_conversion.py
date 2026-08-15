@@ -8,7 +8,7 @@ from packaging.markers import Marker
 from packaging.version import Version as PypiVersion
 from rattler import Version, VersionSpec
 
-from reroll.dependencies.marker_conversion import marker_condition
+from reroll.dependencies.marker_conversion import _condition, marker_condition
 from reroll.dependencies.version_format import format_version
 from reroll.errors import UnconvertableMarkerError, UnconvertablePythonVersionEqualityError
 
@@ -430,13 +430,133 @@ class TestUnsupportedMarkerKeys:
 
 
 class TestContainsNode:
-    def test_in_is_unsupported(self) -> None:
-        with pytest.raises(UnconvertableMarkerError, match="in"):
-            marker_condition(parse('python_version in "3.11"'))
-
     def test_not_in_is_unsupported(self) -> None:
         with pytest.raises(UnconvertableMarkerError, match="in"):
             marker_condition(parse('python_version not in "3.11"'))
+
+    def test_literal_on_the_left_is_still_unsupported(self) -> None:
+        """`"3.11" in python_version` -- the literal on the left -- is a
+        different (and rarer) marker shape than `python_version in
+        "3.11"`; only the latter has a defined rewrite.
+        """
+        with pytest.raises(UnconvertableMarkerError, match="in"):
+            marker_condition(parse('"3.11" in python_version'))
+
+    def test_other_key_membership_is_still_unsupported(self) -> None:
+        with pytest.raises(UnconvertableMarkerError, match="in"):
+            marker_condition(parse('sys_platform in "linux darwin"'))
+
+
+class TestPythonVersionMembership:
+    """docs/matchspec.md's "python_version workaround": `python_version
+    in "<literal>"` (key on the left, not negated) rewrites to an
+    `or`-chain of equality comparisons before conversion, rather than
+    raising `UnconvertableMarkerError` like every other `in`/`not in`
+    shape (`TestContainsNode`). Every literal below sticks to single-digit
+    minors (`3.0`-`3.9`) so none is ever a substring of another -- the
+    substring-collision behavior itself (e.g. `"3.1"` inside `"3.10"`) is
+    `reroll.dependencies.python_version_membership`'s own concern, already
+    covered there.
+    """
+
+    def test_single_matching_minor_converts_like_a_plain_equality(self) -> None:
+        condition = marker_condition(parse('python_version in "3.9"'), abi3_upper_bound="3.9")
+
+        assert condition == marker_condition(parse('python_version == "3.9"'))
+
+    def test_multiple_matches_become_an_or_chain(self) -> None:
+        condition = marker_condition(parse('python_version in "3.2 3.4"'), abi3_upper_bound="3.9")
+
+        assert condition == (
+            f"{marker_condition(parse('python_version == "3.2"'))} or "
+            f"{marker_condition(parse('python_version == "3.4"'))}"
+        )
+
+    def test_comma_separated_list_converts_the_same_as_space_separated(self) -> None:
+        space = marker_condition(parse('python_version in "3.2 3.4"'), abi3_upper_bound="3.9")
+        comma = marker_condition(parse('python_version in "3.2,3.4"'), abi3_upper_bound="3.9")
+
+        assert space == comma
+
+    def test_minor_beyond_the_upper_bound_is_excluded(self) -> None:
+        condition = marker_condition(parse('python_version in "3.5 3.9"'), abi3_upper_bound="3.8")
+
+        assert condition == marker_condition(parse('python_version == "3.5"'))
+
+    def test_no_matching_minor_raises_unconvertable_python_version_equality_error(self) -> None:
+        with pytest.raises(UnconvertablePythonVersionEqualityError):
+            marker_condition(parse('python_version in "no versions here"'), abi3_upper_bound="3.9")
+
+    def test_combined_with_and_parenthesizes_the_or_chain(self) -> None:
+        marker = 'sys_platform == "win32" and python_version in "3.2 3.4"'
+        expected_chain = marker_condition(
+            parse('python_version in "3.2 3.4"'), abi3_upper_bound="3.9"
+        )
+
+        condition = marker_condition(parse(marker), abi3_upper_bound="3.9")
+
+        assert condition == f"__win and ({expected_chain})"
+
+    def test_combined_with_or_and_no_match_drops_the_false_disjunct(self) -> None:
+        marker = 'sys_platform == "win32" or python_version in "no versions here"'
+
+        condition = marker_condition(parse(marker), abi3_upper_bound="3.9")
+
+        assert condition == "__win"
+
+    def test_combined_with_and_and_no_match_collapses_the_whole_marker(self) -> None:
+        marker = 'sys_platform == "win32" and python_version in "no versions here"'
+
+        with pytest.raises(UnconvertablePythonVersionEqualityError):
+            marker_condition(parse(marker), abi3_upper_bound="3.9")
+
+    def test_default_upper_bound_comes_from_resolve_upper_bound(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "reroll.dependencies.marker_conversion.resolve_upper_bound",
+            lambda abi3_upper_bound: 9,
+        )
+
+        condition = marker_condition(parse('python_version in "3.5 3.9"'))
+
+        assert condition == marker_condition(
+            parse('python_version == "3.5" or python_version == "3.9"')
+        )
+
+    def test_no_membership_clause_never_resolves_a_default_upper_bound(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _fail(abi3_upper_bound: str | None) -> int:
+            raise AssertionError("must not resolve a bound when nothing needs rewriting")
+
+        monkeypatch.setattr("reroll.dependencies.marker_conversion.resolve_upper_bound", _fail)
+
+        assert marker_condition(parse('python_version >= "3.9"')) == "python>=3.9.0a0"
+
+    def test_malformed_upper_bound_only_raises_once_a_membership_clause_is_found(self) -> None:
+        assert (
+            marker_condition(parse('python_version >= "3.9"'), abi3_upper_bound="bad")
+            == "python>=3.9.0a0"
+        )
+        with pytest.raises(ValueError, match="abi3_upper_bound"):
+            marker_condition(parse('python_version in "3.9"'), abi3_upper_bound="bad")
+
+    def test_resolve_upper_bound_runs_at_most_once_per_call(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = 0
+
+        def _resolve(abi3_upper_bound: str | None) -> int:
+            nonlocal calls
+            calls += 1
+            return 9
+
+        monkeypatch.setattr("reroll.dependencies.marker_conversion.resolve_upper_bound", _resolve)
+
+        marker_condition(parse('python_version in "3.2" or python_version in "3.4"'))
+
+        assert calls == 1
 
 
 class TestCombining:
@@ -462,12 +582,31 @@ class TestCombining:
             marker_condition(parse(marker))
 
 
-class TestUnreachable:
-    def test_a_resolved_boolean_leaf_raises_an_assertion_error(self) -> None:
-        """`marker_condition` is only ever handed a `Node` parsed straight
-        from a PEP 508 marker string, which never contains a resolved
-        boolean literal -- this guards against misuse, e.g. passing an
-        already-`markerpry.evaluate`d tree instead.
+class TestConstantMarker:
+    """A bare boolean node -- whether handed in directly, or produced by a
+    `python_version in "<literal>"` clause whose exhaustive expansion
+    matches no candidate minor at all (`TestPythonVersionMembership`) --
+    has no matchspec representation.
+    """
+
+    def test_a_bare_boolean_leaf_raises_unconvertable_python_version_equality_error(
+        self,
+    ) -> None:
+        with pytest.raises(UnconvertablePythonVersionEqualityError):
+            marker_condition(TRUE)
+
+
+class TestConditionDispatchIsExhaustive:
+    def test_a_bare_boolean_node_is_unreachable_through_condition_directly(self) -> None:
+        """`_condition` is `marker_condition`'s private recursive
+        dispatcher, walking the tree `marker_condition` already rewrote --
+        it never sees a bare boolean node itself: `marker_condition`
+        checks for one up front (`TestConstantMarker`), and a genuine
+        `OperatorNode` child never holds one either, since
+        `OperatorNode.combine` absorbs a boolean child into its parent
+        instead of keeping it. This exercises `_condition`'s own
+        defensive fallback directly, since nothing in `marker_condition`
+        itself can reach it.
         """
         with pytest.raises(AssertionError):
-            marker_condition(TRUE)
+            _condition(TRUE)

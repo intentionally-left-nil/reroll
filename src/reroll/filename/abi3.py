@@ -4,7 +4,6 @@ each, since neither is itself an installable target.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable
 
 from packaging.tags import Tag
@@ -12,10 +11,9 @@ from packaging.tags import Tag
 from reroll.errors import RerollError
 from reroll.filename.abi import check_interpreter_abi
 from reroll.filename.interpreter import parse_interpreter
-from reroll.filename.python_latest_release import latest_python_minor
+from reroll.filename.python_latest_release import resolve_upper_bound
 
 _STABLE_ABIS = ("abi3", "abi3t")
-_MINOR_ONLY_RE = re.compile(r"^3\.(\d+)$")
 
 
 def explode_abi3(tags: Iterable[Tag], *, abi3_upper_bound: str | None = None) -> frozenset[Tag]:
@@ -31,16 +29,16 @@ def explode_abi3(tags: Iterable[Tag], *, abi3_upper_bound: str | None = None) ->
     other tags pass through unchanged too. The result is deduplicated
     against both itself and any unrelated tags already present.
 
-    `abi3_upper_bound=None` defers to `latest_python_minor`, but only once
-    at least one stable-ABI tag is actually present -- a wheel with no
-    `abi3`/`abi3t` tag never triggers that lookup (nor its network/cache
-    cost).
+    `abi3_upper_bound=None` defers to `reroll.filename.python_latest_release.resolve_upper_bound`
+    (in turn `latest_python_minor`), but only once at least one stable-ABI
+    tag is actually present -- a wheel with no `abi3`/`abi3t` tag never
+    triggers that lookup (nor its network/cache cost).
     """
     tags = frozenset(tags)
     if not any(tag.abi in _STABLE_ABIS for tag in tags):
         return tags
 
-    upper_minor = _resolve_upper_bound(abi3_upper_bound)
+    upper_minor = resolve_upper_bound(abi3_upper_bound)
     exploded: set[Tag] = set()
     for tag in tags:
         if tag.abi in _STABLE_ABIS:
@@ -74,16 +72,3 @@ def _is_legal_pairing(interpreter: str, abi: str) -> bool:
     except RerollError:
         return False
     return True
-
-
-def _resolve_upper_bound(abi3_upper_bound: str | None) -> int:
-    if abi3_upper_bound is None:
-        return latest_python_minor()
-
-    match = _MINOR_ONLY_RE.match(abi3_upper_bound)
-    if match is None:
-        raise ValueError(
-            "abi3_upper_bound must be a minor version like '3.15' "
-            f"(not a patch version): {abi3_upper_bound!r}"
-        )
-    return int(match.group(1))

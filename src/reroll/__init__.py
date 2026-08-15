@@ -91,6 +91,22 @@ def reroll(
     )
 
 
-def to_matchspec(entry: str, *, mappers: NameMappers | None = None, allow_pre: bool = False) -> str:
+def to_matchspec(
+    entry: str,
+    *,
+    mappers: NameMappers | None = None,
+    allow_pre: bool = False,
+    abi3_upper_bound: str | None = None,
+) -> str:
+    """`entry`'s conda MatchSpec (`reroll.dependencies.pep508_to_matchspec`).
+
+    `abi3_upper_bound` bounds a `python_version in "<literal>"` marker's
+    conversion: a minor-only version string like `"3.15"`; `None` (the
+    default) keeps this easy to call without one -- it defers to
+    `latest_python_minor`, lazily, and only if `entry`'s marker actually
+    has such a clause.
+    """
     mappers = mappers or default_mappers()
-    return pep508_to_matchspec(entry, mappers, allow_pre=allow_pre)
+    return pep508_to_matchspec(
+        entry, mappers, allow_pre=allow_pre, abi3_upper_bound=abi3_upper_bound
+    )

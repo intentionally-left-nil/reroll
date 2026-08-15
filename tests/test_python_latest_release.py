@@ -23,6 +23,7 @@ from reroll.filename.python_latest_release import (
     _is_stale,
     _latest_minor_from_releases,
     latest_python_minor,
+    resolve_upper_bound,
 )
 
 # --------------------------------------------------------------------------
@@ -68,6 +69,33 @@ class TestLatestMinorFromReleases:
         data = _releases_payload(["2.7"])
         with pytest.raises(UpstreamDataError, match="3.x"):
             _latest_minor_from_releases(data)
+
+
+# --------------------------------------------------------------------------
+# `resolve_upper_bound`
+# --------------------------------------------------------------------------
+
+
+class TestResolveUpperBound:
+    def test_minor_only_string_parses_directly_without_a_lookup(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _fail() -> int:
+            raise AssertionError("must not look up a default when a bound is given")
+
+        monkeypatch.setattr("reroll.filename.python_latest_release.latest_python_minor", _fail)
+
+        assert resolve_upper_bound("3.15") == 15
+
+    def test_none_defers_to_latest_python_minor(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("reroll.filename.python_latest_release.latest_python_minor", lambda: 11)
+
+        assert resolve_upper_bound(None) == 11
+
+    @pytest.mark.parametrize("upper_bound", ["3.15.3", "15", "abc", "3.", "3"])
+    def test_rejects_a_malformed_bound(self, upper_bound: str) -> None:
+        with pytest.raises(ValueError, match="abi3_upper_bound"):
+            resolve_upper_bound(upper_bound)
 
 
 # --------------------------------------------------------------------------

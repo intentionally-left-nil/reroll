@@ -200,12 +200,42 @@ class TestImplementationVersionEquivalence:
         )
 
 
+class TestPythonVersionMembershipEquivalence:
+    """docs/matchspec.md's "python_version workaround": `python_version
+    in "<literal>"` rewrites to an `or`-chain of equalities before
+    conversion (unlike every other `in`/`not in` shape,
+    `TestOracleItselfRejectsUnconvertableMarkers`) -- this confirms that
+    rewrite's result still agrees with pip's own (substring-based) marker
+    evaluation.
+    """
+
+    @pytest.mark.parametrize("literal", ["3.8 3.9 3.13", "3.8,3.9,3.13", "3.8, 3.9, 3.13"])
+    def test_multi_value_list_agrees_with_pip_across_every_candidate(self, literal: str) -> None:
+        assert_matchspec_agrees_with_pip(
+            f'python_version in "{literal}"', _PYTHON_VERSION_CANDIDATES, abi3_upper_bound="3.13"
+        )
+
+    def test_and_combination_agrees_with_pip_across_every_candidate(self) -> None:
+        marker = 'python_version in "3.9 3.13" and python_version < "3.13"'
+        assert_matchspec_agrees_with_pip(
+            marker, _PYTHON_VERSION_CANDIDATES, abi3_upper_bound="3.13"
+        )
+
+
 class TestOracleItselfRejectsUnconvertableMarkers:
     """The oracle's `matchspec_condition` is a thin wrapper over
     `marker_condition` -- a marker that function can't convert at all must
     still raise, not silently produce a condition to (mis)compare.
     """
 
-    def test_unconvertable_marker_still_raises(self) -> None:
+    def test_not_in_still_raises(self) -> None:
         with pytest.raises(UnconvertableMarkerError):
-            assert_matchspec_agrees_with_pip('python_version in "3.11"', _PYTHON_VERSION_CANDIDATES)
+            assert_matchspec_agrees_with_pip(
+                'python_version not in "3.11"', _PYTHON_VERSION_CANDIDATES, abi3_upper_bound="3.13"
+            )
+
+    def test_key_on_the_right_still_raises(self) -> None:
+        with pytest.raises(UnconvertableMarkerError):
+            assert_matchspec_agrees_with_pip(
+                '"3.11" in python_version', _PYTHON_VERSION_CANDIDATES, abi3_upper_bound="3.13"
+            )

@@ -10,7 +10,9 @@ from packaging.version import InvalidVersion, Version
 
 from reroll.dependencies.python_version_membership import (
     is_python_version_in_literal,
+    is_python_version_not_in_literal,
     rewrite_python_version_in_modifier,
+    rewrite_python_version_not_in_modifier,
 )
 from reroll.dependencies.version_format import format_version, format_version_literal
 from reroll.errors import UnconvertableMarkerError, UnconvertablePythonVersionEqualityError
@@ -38,17 +40,22 @@ def marker_condition(node: Node, *, abi3_upper_bound: str | None = None) -> str:
     workaround": an `or`-chain of `python_version == "3.<minor>"` terms,
     one per candidate minor from `3.0` through `abi3_upper_bound` whose
     `"3.<minor>"` form is a substring of `<literal>`
-    (`reroll.dependencies.python_version_membership`). `abi3_upper_bound`
-    is the same minor-only version string (e.g. `"3.15"`) `explode_abi3`
-    takes -- `None` (the default) defers to `latest_python_minor`, and
-    only once a clause actually needing it is found, so a marker with no
-    `python_version in` clause never triggers that lookup.
+    (`reroll.dependencies.python_version_membership`). Every
+    `python_version not in "<literal>"` clause (key on the left, negated)
+    is rewritten next, in a separate pass, into an `and`-chain of
+    `python_version != "3.<minor>"` terms instead. `abi3_upper_bound` is
+    the same minor-only version string (e.g. `"3.15"`) `explode_abi3`
+    takes -- `None` (the default) defers to `latest_python_minor`, resolved
+    lazily and at most once per pass, so a marker with neither a
+    `python_version in` nor a `python_version not in` clause never
+    triggers either lookup.
 
     Raises `UnconvertablePythonVersionEqualityError` if `node` -- after
     that rewrite -- is constant: either handed in as a bare boolean, or
-    reduced to one by a `python_version in "<literal>"` clause matching no
-    candidate minor at all. A constant has no matchspec representation
-    (docs/matchspec.md's "universally false"/"universally true" note).
+    reduced to one by a `python_version in`/`not in` `"<literal>"` clause
+    matching no candidate minor at all. A constant has no matchspec
+    representation (docs/matchspec.md's "universally false"/"universally
+    true" note).
 
     Raises `UnconvertableMarkerError` for anything else the table can't
     represent: any other `in`/`not in` test, `platform_machine` or any
@@ -60,6 +67,7 @@ def marker_condition(node: Node, *, abi3_upper_bound: str | None = None) -> str:
     (`"extra" in node`) before calling.
     """
     rewritten = node.modify(leaf=_rewrite_python_version_in(abi3_upper_bound))
+    rewritten = rewritten.modify(leaf=_rewrite_python_version_not_in(abi3_upper_bound))
     if isinstance(rewritten, BooleanNode):
         raise UnconvertablePythonVersionEqualityError(
             f"marker {node} is always {bool(rewritten)} once its python_version "
@@ -102,6 +110,28 @@ def _rewrite_python_version_in(abi3_upper_bound: str | None) -> LeafModifier:
         if resolved_max_minor is None:
             resolved_max_minor = resolve_upper_bound(abi3_upper_bound)
         return rewrite_python_version_in_modifier(resolved_max_minor)(node)
+
+    return leaf
+
+
+def _rewrite_python_version_not_in(abi3_upper_bound: str | None) -> LeafModifier:
+    """Builds the `markerpry` leaf modifier `marker_condition` runs over
+    the whole marker tree once, right after `_rewrite_python_version_in`'s
+    own pass: `rewrite_python_version_not_in_modifier`, with
+    `abi3_upper_bound` resolved to a concrete minor -- lazily, and at most
+    once per `marker_condition` call, since `resolve_upper_bound` may hit
+    the network (`latest_python_minor`) and most markers have no
+    `python_version not in` clause to justify that cost at all.
+    """
+    resolved_max_minor: int | None = None
+
+    def leaf(node: Node) -> Node:
+        nonlocal resolved_max_minor
+        if not is_python_version_not_in_literal(node):
+            return node
+        if resolved_max_minor is None:
+            resolved_max_minor = resolve_upper_bound(abi3_upper_bound)
+        return rewrite_python_version_not_in_modifier(resolved_max_minor)(node)
 
     return leaf
 

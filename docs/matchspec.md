@@ -180,7 +180,14 @@ Conda matchspec doesn't provide a clean mapping to matching this behavior. On fi
 However, rattler-py doesn't support a leading `*` for the version field (this may be a rattler bug) as `VersionSpec('*3.1*')` throws an exception. This bug has been filed as https://github.com/conda/rattler/issues/2679
 
 Until this is fixed, we will NOT support `in/not in` with matchspec. Instead, the conversion code raises `UnconvertableMarkerError` if that is present.
-Potentially this could be worked around for python_version by means of exhaustive expansion of the possibilties, pre-computing the actual matches, and then selecting those. However that's a lot of work and so the initial decision is just to not allow `in/not in`
+
+### python_version workaround
+Since `python_version` is only `major.minor`, we are restricting major to 3, and minor to the most recent version of python, there are O(20) possible values of python_version. Thus, for the marker `python_version in "3.3, 3.11"`, we can deterministically convert this by
+1. Enumerate all possible values of python_version from 3.0 -> 3.max_minor
+2. For each value, set that as the python_version, and see if the substring match evaluates to true
+3. For every true value, create an equality comparison, joined with or.
+
+So, `python_version in "3.1, 3.2, zzz3.13"` would translate to `python_version == "3.1" or python_version == "3.2" or python_version == "3.13`
 
 ## python_version Major, minor, and patch comparisons
 `python_version`'s own value is always exactly major.minor (`"3.9"`, never `"3.9.2"`). The literal on the other side of the comparison is just a string the wheel author wrote; PEP 440 decides what it means once it's compared as a version, not as a string.

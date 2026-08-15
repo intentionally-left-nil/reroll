@@ -57,6 +57,12 @@ def get_wheel_records(
     config (a noarch record, an arch-specific one per `CondaSubdir`, or an
     arch-split retry -- see that function).
 
+    `abi3_upper_bound` is passed straight through to both
+    `parse_filename` (bounding `abi3`/`abi3t` tag explosion) and
+    `wheel_dependencies` (bounding a residual `python_version in
+    "<literal>"` marker's conversion) -- the same minor-only version
+    string caps both.
+
     Every record's `version` comes from `metadata.version` (the METADATA
     `Version` header), CEP-33-formatted (`format_version`) rather than left
     as PEP 440 -- docs/wheel_record.md.
@@ -83,7 +89,9 @@ def get_wheel_records(
     version = format_version(metadata.version)
     records: list[WheelRecord] = []
     for config in configs:
-        deps_by_subdir = wheel_dependencies(config, metadata, mappers, allow_pre=allow_pre)
+        deps_by_subdir = wheel_dependencies(
+            config, metadata, mappers, allow_pre=allow_pre, abi3_upper_bound=abi3_upper_bound
+        )
         for subdir, dependencies in deps_by_subdir.items():
             records.append(
                 WheelRecord(

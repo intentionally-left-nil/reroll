@@ -22,6 +22,7 @@ CACHE_FILENAME_PREFIX = "python_version_"
 
 _MAX_CACHE_AGE = timedelta(days=1)
 _RELEASE_MINOR_RE = re.compile(r"^3\.(\d+)$")
+_MINOR_ONLY_RE = re.compile(r"^3\.(\d+)$")
 
 
 def latest_python_minor(
@@ -42,6 +43,30 @@ def latest_python_minor(
     path = _ensure_fresh_cache(directory, url)
     data = json.loads(path.read_text())
     return _latest_minor_from_releases(data)
+
+
+def resolve_upper_bound(abi3_upper_bound: str | None) -> int:
+    """The concrete CPython minor `abi3_upper_bound` names (a minor-only
+    version string like `"3.15"`), or `latest_python_minor()` if
+    `abi3_upper_bound` is `None` -- the shared resolution every
+    `abi3_upper_bound`-accepting caller uses, whether that parameter
+    bounds `abi3`/`abi3t` tag explosion
+    (`reroll.filename.abi3.explode_abi3`) or a `python_version in "..."`
+    marker rewrite (`reroll.dependencies.marker_conversion.marker_condition`).
+
+    Raises `ValueError` if `abi3_upper_bound` is given but isn't a
+    minor-only version string (a patch-level string like `"3.15.3"` is
+    rejected).
+    """
+    if abi3_upper_bound is None:
+        return latest_python_minor()
+    match = _MINOR_ONLY_RE.match(abi3_upper_bound)
+    if match is None:
+        raise ValueError(
+            "abi3_upper_bound must be a minor version like '3.15' "
+            f"(not a patch version): {abi3_upper_bound!r}"
+        )
+    return int(match.group(1))
 
 
 def _ensure_fresh_cache(directory: Path, url: str) -> Path:

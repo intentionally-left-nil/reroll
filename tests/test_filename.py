@@ -988,7 +988,7 @@ class TestExplodeAbi3:
         def _fail() -> int:
             raise AssertionError("must not look up a default when nothing needs exploding")
 
-        monkeypatch.setattr("reroll.filename.abi3.latest_python_minor", _fail)
+        monkeypatch.setattr("reroll.filename.python_latest_release.latest_python_minor", _fail)
 
         tags = {_tag("cp313", "cp313")}
         assert explode_abi3(tags, abi3_upper_bound=None) == frozenset(tags)
@@ -996,7 +996,7 @@ class TestExplodeAbi3:
     def test_none_upper_bound_uses_the_default_lookup(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr("reroll.filename.abi3.latest_python_minor", lambda: 11)
+        monkeypatch.setattr("reroll.filename.python_latest_release.latest_python_minor", lambda: 11)
 
         result = explode_abi3({_tag("cp39", "abi3")}, abi3_upper_bound=None)
 
@@ -1282,7 +1282,7 @@ class TestParseFilenameAbi3Explosion:
     def test_default_upper_bound_comes_from_the_latest_release_lookup(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr("reroll.filename.abi3.latest_python_minor", lambda: 11)
+        monkeypatch.setattr("reroll.filename.python_latest_release.latest_python_minor", lambda: 11)
 
         configs = parse_filename(
             "tinylib-1.2.3-cp39-abi3-manylinux_2_17_x86_64.whl", mappers=(aggregator_mapper,)
@@ -1296,7 +1296,7 @@ class TestParseFilenameAbi3Explosion:
         def _fail() -> int:
             raise AssertionError("must not look up a default when nothing needs exploding")
 
-        monkeypatch.setattr("reroll.filename.abi3.latest_python_minor", _fail)
+        monkeypatch.setattr("reroll.filename.python_latest_release.latest_python_minor", _fail)
 
         parse_filename(
             "tinylib-1.2.3-cp313-cp313-manylinux_2_17_x86_64.whl", mappers=(aggregator_mapper,)

@@ -732,11 +732,23 @@ class TestMarkers:
         with pytest.raises(UnconvertableMarkerError, match="python_full_version"):
             pep508_to_matchspec(entry, (aggregator_mapper,))
 
-    def test_in_marker_raises(self) -> None:
+    def test_in_marker_converts_via_the_membership_rewrite(self) -> None:
+        """Unlike every other `in`/`not in` shape, `python_version in
+        "<literal>"` (key on the left, not negated) has a defined
+        rewrite (docs/matchspec.md's "python_version workaround") instead
+        of raising `UnconvertableMarkerError`.
+        """
         entry = 'requests>=2.0.0; python_version in "3.9"'
 
-        with pytest.raises(UnconvertableMarkerError, match="'in'/'not in'"):
-            pep508_to_matchspec(entry, (aggregator_mapper,))
+        assert pep508_to_matchspec(entry, (aggregator_mapper,), abi3_upper_bound="3.9") == (
+            'requests >=2.0.0[when="python>=3.9.0a0,<3.10.0a0"]'
+        )
+
+    def test_in_marker_with_no_matching_minor_raises_its_own_error(self) -> None:
+        entry = 'requests>=2.0.0; python_version in "not a version list"'
+
+        with pytest.raises(UnconvertablePythonVersionEqualityError):
+            pep508_to_matchspec(entry, (aggregator_mapper,), abi3_upper_bound="3.9")
 
     def test_not_in_marker_raises(self) -> None:
         entry = 'requests>=2.0.0; python_version not in "3.9"'

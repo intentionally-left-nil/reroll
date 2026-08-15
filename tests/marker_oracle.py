@@ -19,19 +19,22 @@ from rattler import VersionSpec
 from reroll.dependencies.marker_conversion import marker_condition
 from reroll.dependencies.version_format import format_version
 
-_ATOM_PATTERN = re.compile(r"python(?:==|!=|>=|<=|=|>|<)\S+|__[a-z]+")
+_ATOM_PATTERN = re.compile(r"python(?:==|!=|>=|<=|=|>|<)[^\s()]+|__[a-z]+")
 """Every leaf `marker_condition` can emit: a `python<op>...` version
 comparison (including the bare `=` fuzzy match a glob literal converts to)
-or a virtual package bare name (`__linux`, ...).
+or a virtual package bare name (`__linux`, ...). `[^\\s()]+`, not `\\S+`,
+so an atom that's itself wrapped in parens (any same-operator chain of 3+
+terms, `docs/matchspec.md`) doesn't swallow the closing `)` into the match
+-- a version spec never contains a paren itself.
 """
 
 
-def matchspec_condition(marker: str) -> str:
+def matchspec_condition(marker: str, *, abi3_upper_bound: str | None = None) -> str:
     """reroll's matchspec `when=` condition for the PEP 508 marker string
     `marker`, via the same `marker_condition` production code
     `pep508_to_matchspec` calls.
     """
-    return marker_condition(parse(marker))
+    return marker_condition(parse(marker), abi3_upper_bound=abi3_upper_bound)
 
 
 def pip_evaluates(marker: str, python_full_version: str) -> bool:
@@ -66,13 +69,15 @@ def matchspec_evaluates(condition: str, python_full_version: str) -> bool:
     return _eval_bool_expression(_ATOM_PATTERN.sub(_resolve_atom, condition))
 
 
-def assert_matchspec_agrees_with_pip(marker: str, python_full_versions: Iterable[str]) -> None:
+def assert_matchspec_agrees_with_pip(
+    marker: str, python_full_versions: Iterable[str], *, abi3_upper_bound: str | None = None
+) -> None:
     """Converts `marker` to a matchspec condition once, then asserts that
     condition's `matchspec_evaluates` result agrees with `pip_evaluates`
     independently, for every `python_full_versions` candidate -- the
     equivalence the conversion exists to preserve.
     """
-    condition = matchspec_condition(marker)
+    condition = matchspec_condition(marker, abi3_upper_bound=abi3_upper_bound)
     for python_full_version in python_full_versions:
         pip_result = pip_evaluates(marker, python_full_version)
         matchspec_result = matchspec_evaluates(condition, python_full_version)

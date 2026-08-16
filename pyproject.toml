@@ -1,6 +1,6 @@
 [project]
 name = "py-reroll"
-version = "0.2.0"
+version = "0.3.0"
 description = "Generate v3 repodata from a wheel's METADATA file"
 readme = "README.md"
 authors = [

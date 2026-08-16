@@ -73,7 +73,7 @@ class TestNoRequiresDist:
 
         result = _dependencies(config, metadata, (aggregator_mapper,))
 
-        assert result.depends == ("python >=3.13,<3.14.0a0", "python_abi 3.13.* *_cp313")
+        assert result.depends == ("python <3.14a0,>=3.13", "python_abi 3.13.* *_cp313")
         assert result.extra_depends == {}
 
     def test_unsolvable_python_range_raises(self) -> None:
@@ -205,7 +205,7 @@ class TestResidualMarker:
 
         assert result.depends == (
             "requests >=2.0.0",
-            "python >=3.13,<3.14.0a0",
+            "python <3.14a0,>=3.13",
             "python_abi 3.13.* *_cp313",
         )
 
@@ -216,8 +216,35 @@ class TestResidualMarker:
         result = _dependencies(config, metadata, (aggregator_mapper,))
 
         assert result.depends == (
-            "python >=3.13,<3.14.0a0",
+            "python <3.14a0,>=3.13",
             "python_abi 3.13.* *_cp313",
+        )
+
+    def test_non_simplified_requires_python_leaves_python_version_markers_unresolved(
+        self,
+    ) -> None:
+        """`<=3.11` isn't a Simplified Requires-Python, so the combined
+        Python version range is a plain PEP 440 specifier string, not a
+        `HalfOpenRange` -- `exact_minor` has no structured range to check
+        for a single-minor restriction, so it always returns `None` for
+        it. `python_version`/`python_full_version`/`implementation_version`
+        are therefore left out of every `Requires-Dist` entry's evaluation
+        environment for this record, and a marker referencing any of them
+        is handed straight through as a `when=` clause -- conservatively
+        correct (never silently resolved to the wrong answer), just less
+        tight than a Simplified range would allow.
+        """
+        config = _config(interpreter="py38", abi="none")
+        metadata = _metadata(
+            requires_python="<=3.11",
+            requires_dist=('requests>=2.0.0; python_version < "3.10"',),
+        )
+
+        result = _dependencies(config, metadata, (aggregator_mapper,))
+
+        assert result.depends == (
+            'requests >=2.0.0[when="python<3.10.0a0"]',
+            "python <=3.11,>=3.8",
         )
 
 

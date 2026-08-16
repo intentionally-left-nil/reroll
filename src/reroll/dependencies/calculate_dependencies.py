@@ -13,7 +13,7 @@ from reroll.dependencies.extras import find_extras
 from reroll.dependencies.glibc import glibc_dependency
 from reroll.dependencies.osx import osx_dependency
 from reroll.dependencies.pep508_to_matchspec import pep508_to_matchspec
-from reroll.dependencies.python import python_dependencies, python_range
+from reroll.dependencies.python import exact_minor, python_dependencies
 from reroll.dependencies.requires_dist import strip_interpreter_requirements
 from reroll.filename import WheelConfig
 from reroll.matchspec import CondaExtraName, MatchSpecStr
@@ -95,7 +95,7 @@ def calculate_dependencies(
     be unrepresentable in conda for `subdir` -- the whole wheel record
     should not be emitted.
     """
-    python_version = python_range(config, metadata)
+    python_minor = exact_minor(config, metadata)
     requires_dist = strip_interpreter_requirements(metadata.requires_dist)
     extra_names = find_extras(requires_dist)
 
@@ -107,7 +107,7 @@ def calculate_dependencies(
             matchspec = _entry_dependency(
                 entry,
                 extra=extra_name,
-                python_version=python_version,
+                python_minor=python_minor,
                 subdir=subdir,
                 mappers=mappers,
                 allow_pre=allow_pre,
@@ -116,7 +116,7 @@ def calculate_dependencies(
             if matchspec is not None:
                 target.append(matchspec)
 
-    depends.extend(python_dependencies(config, metadata))
+    depends.extend(python_dependencies(config, metadata, allow_pre=allow_pre))
     glibc = glibc_dependency(config)
     if glibc is not None:
         depends.append(glibc)
@@ -133,7 +133,7 @@ def _entry_dependency(
     entry: str,
     *,
     extra: str,
-    python_version: tuple[int, int | None],
+    python_minor: int | None,
     subdir: CondaSubdir | None,
     mappers: NameMappers,
     allow_pre: bool,
@@ -145,7 +145,7 @@ def _entry_dependency(
     requirement = Requirement(entry)
     marker_node = parse_marker(requirement.marker) if requirement.marker is not None else TRUE
     residual = conditional_dependency(
-        marker_node, extra=extra, python_version=python_version, subdir=subdir
+        marker_node, extra=extra, python_minor=python_minor, subdir=subdir
     )
     if residual is None:
         return None

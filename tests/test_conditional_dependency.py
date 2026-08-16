@@ -14,11 +14,11 @@ def _result(
     marker_str: str,
     *,
     extra: str = "",
-    python_version: tuple[int, int | None] = (8, None),
+    python_minor: int | None = None,
     subdir: CondaSubdir | None = None,
 ) -> str | None:
     return conditional_dependency(
-        parse(marker_str), extra=extra, python_version=python_version, subdir=subdir
+        parse(marker_str), extra=extra, python_minor=python_minor, subdir=subdir
     )
 
 
@@ -28,10 +28,10 @@ class TestFullEvaluation:
     """
 
     def test_marker_matching_the_pinned_minor_is_unconditional(self) -> None:
-        assert _result('python_version == "3.13"', python_version=(13, 14)) == ""
+        assert _result('python_version == "3.13"', python_minor=13) == ""
 
     def test_marker_not_matching_the_pinned_minor_is_skipped(self) -> None:
-        assert _result('python_version == "3.9"', python_version=(13, 14)) is None
+        assert _result('python_version == "3.9"', python_minor=13) is None
 
 
 class TestExtraSelection:
@@ -56,7 +56,7 @@ class TestExtraSelection:
         result = _result(
             'extra == "cli" and python_version < "3.9"',
             extra="cli",
-            python_version=(8, None),
+            python_minor=None,
         )
 
         assert result == 'python_version < "3.9"'
@@ -119,9 +119,7 @@ class TestLeftoverMarkerString:
     """
 
     def test_unpinned_python_version_is_returned_as_is(self) -> None:
-        assert _result('python_version >= "3.9"', python_version=(8, None)) == (
-            'python_version >= "3.9"'
-        )
+        assert _result('python_version >= "3.9"', python_minor=None) == ('python_version >= "3.9"')
 
 
 class TestFullVersionReduction:
@@ -137,7 +135,7 @@ class TestFullVersionReduction:
         it resolves fully -- unaffected by the reduction rule, which only
         concerns `==`/`!=`/`in`/`not in`.
         """
-        assert _result('python_full_version < "3.14"', python_version=(13, 14)) == ""
+        assert _result('python_full_version < "3.14"', python_minor=13) == ""
 
     def test_equality_outside_the_pinned_minor_is_not_resolved_false(self) -> None:
         """Without dropping `python_full_version` from the environment, a
@@ -147,7 +145,7 @@ class TestFullVersionReduction:
         equality at all, so this must be handed back as-is instead of
         being skipped.
         """
-        assert _result('python_full_version == "2.7.5"', python_version=(13, 14)) == (
+        assert _result('python_full_version == "2.7.5"', python_minor=13) == (
             'python_full_version == "2.7.5"'
         )
 
@@ -158,12 +156,12 @@ class TestFullVersionReduction:
         reducible, so this must be handed back as-is instead of being
         added unconditionally.
         """
-        assert _result('python_full_version != "2.7.5"', python_version=(13, 14)) == (
+        assert _result('python_full_version != "2.7.5"', python_minor=13) == (
             'python_full_version != "2.7.5"'
         )
 
     def test_implementation_version_is_reduced_the_same_way(self) -> None:
-        assert _result('implementation_version == "2.7.5"', python_version=(13, 14)) == (
+        assert _result('implementation_version == "2.7.5"', python_minor=13) == (
             'implementation_version == "2.7.5"'
         )
 
@@ -173,7 +171,7 @@ class TestFullVersionReduction:
         nothing observable here -- this only confirms the drop covers
         `ContainsNode`, not just `CompareNode`.
         """
-        assert _result('"3.13.2" in python_full_version', python_version=(13, 14)) == (
+        assert _result('"3.13.2" in python_full_version', python_minor=13) == (
             '"3.13.2" in python_full_version'
         )
 
@@ -183,7 +181,7 @@ class TestFullVersionReduction:
         and `not in` together), and is covered by the same `ContainsNode`
         check regardless of its `negate` flag.
         """
-        assert _result('"3.13.2" not in python_full_version', python_version=(13, 14)) == (
+        assert _result('"3.13.2" not in python_full_version', python_minor=13) == (
             '"3.13.2" not in python_full_version'
         )
 
@@ -196,7 +194,7 @@ class TestFullVersionReduction:
         disagree and the reduction algorithm must leave this unresolved
         rather than reducing it to an always-true/always-false answer.
         """
-        assert _result('python_full_version >= "3.13.50"', python_version=(13, 14)) == (
+        assert _result('python_full_version >= "3.13.50"', python_minor=13) == (
             'python_full_version >= "3.13.50"'
         )
 
@@ -209,7 +207,7 @@ class TestFullVersionReduction:
         """
         result = _result(
             'python_full_version == "2.7.5" or implementation_version < "3.9"',
-            python_version=(13, 14),
+            python_minor=13,
         )
 
         assert result == 'python_full_version == "2.7.5"'
@@ -222,28 +220,22 @@ class TestFullVersionReduction:
         """
         result = _result(
             'python_full_version == "3.13.2" or python_full_version < "3.9"',
-            python_version=(13, 14),
+            python_minor=13,
         )
 
         assert result == 'python_full_version == "3.13.2" or python_full_version < "3.9"'
 
 
 class TestExactMinor:
-    """`python_version`'s `(floor, ceiling)` shape only fixes a minor when
-    it covers exactly one -- otherwise `python_version`/`python_full_version`/
-    `implementation_version` are left out of the environment, and a marker
-    referencing them is handed back unresolved.
+    """`python_minor` only fixes `python_version`/`python_full_version`/
+    `implementation_version` in the environment when it's not `None` --
+    otherwise a marker referencing them is handed back unresolved.
     """
 
-    def test_unbounded_ceiling_does_not_pin_a_minor(self) -> None:
-        assert _result('python_version == "3.13"', python_version=(13, None)) == (
+    def test_no_pinned_minor_does_not_resolve_python_version(self) -> None:
+        assert _result('python_version == "3.13"', python_minor=None) == (
             'python_version == "3.13"'
         )
 
-    def test_multi_minor_range_does_not_pin_a_minor(self) -> None:
-        assert _result('python_version == "3.13"', python_version=(13, 15)) == (
-            'python_version == "3.13"'
-        )
-
-    def test_single_minor_range_pins_the_minor(self) -> None:
-        assert _result('python_version == "3.13"', python_version=(13, 14)) == ""
+    def test_pinned_minor_resolves_python_version(self) -> None:
+        assert _result('python_version == "3.13"', python_minor=13) == ""

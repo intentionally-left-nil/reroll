@@ -8,9 +8,19 @@ import pytest
 
 from reroll.dependencies import calculate_dependencies, wheel_dependencies
 from reroll.dependencies.extras import find_extras
-from reroll.dependencies.python import python_dependencies
+from reroll.dependencies.python import (
+    _range_exact_minor,
+    _range_specifier,
+    exact_minor,
+    python_dependencies,
+)
+from reroll.dependencies.python_version_dependency import HalfOpenRange
 from reroll.dependencies.requires_dist import strip_interpreter_requirements
-from reroll.errors import InvalidAbiTagError, PythonRangeMismatchError
+from reroll.errors import (
+    InvalidAbiTagError,
+    PythonRangeMismatchError,
+    UnconvertableRequirementError,
+)
 from reroll.filename import Arch, WheelConfig
 from reroll.name_mapping import aggregator_mapper
 from reroll.subdir import CondaSubdir
@@ -77,9 +87,9 @@ class TestNoRequiresPython:
     @pytest.mark.parametrize(
         ("interpreter", "abi", "expected_matchspec"),
         [
-            ("cp37", "none", "python >=3.7,<3.8.0a0"),
-            ("cp37", "cp37", "python >=3.7,<3.8.0a0"),
-            ("cp39", "cp39", "python >=3.9,<3.10.0a0"),
+            ("cp37", "none", "python <3.8a0,>=3.7"),
+            ("cp37", "cp37", "python <3.8a0,>=3.7"),
+            ("cp39", "cp39", "python <3.10a0,>=3.9"),
         ],
     )
     def test_pinned_python_only_below_310(
@@ -92,10 +102,10 @@ class TestNoRequiresPython:
     @pytest.mark.parametrize(
         ("minor", "expected_python", "expected_python_abi"),
         [
-            (10, "python >=3.10,<3.11.0a0", "python_abi 3.10.* *_cp310"),
-            (11, "python >=3.11,<3.12.0a0", "python_abi 3.11.* *_cp311"),
-            (12, "python >=3.12,<3.13.0a0", "python_abi 3.12.* *_cp312"),
-            (13, "python >=3.13,<3.14.0a0", "python_abi 3.13.* *_cp313"),
+            (10, "python <3.11a0,>=3.10", "python_abi 3.10.* *_cp310"),
+            (11, "python <3.12a0,>=3.11", "python_abi 3.11.* *_cp311"),
+            (12, "python <3.13a0,>=3.12", "python_abi 3.12.* *_cp312"),
+            (13, "python <3.14a0,>=3.13", "python_abi 3.13.* *_cp313"),
         ],
     )
     def test_regular_gil_emits_python_abi_from_310(
@@ -112,7 +122,7 @@ class TestNoRequiresPython:
         config = _config(interpreter="cp313", abi="cp313t")
 
         assert python_dependencies(config, _metadata()) == (
-            "python >=3.13,<3.14.0a0",
+            "python <3.14a0,>=3.13",
             "python_abi 3.13.* *_cp313t",
         )
 
@@ -125,7 +135,7 @@ class TestNoRequiresPython:
         config = _config(interpreter="cp310", abi="none")
 
         assert python_dependencies(config, _metadata()) == (
-            "python >=3.10,<3.11.0a0",
+            "python <3.11a0,>=3.10",
             "python_abi 3.10.* *_cp310",
         )
 
@@ -157,7 +167,7 @@ class TestRequiresPythonTightening:
         config = _config(interpreter="py38", abi="none")
 
         assert python_dependencies(config, _metadata(requires_python=">=3.9,<3.12")) == (
-            "python >=3.9,<3.12.0a0",
+            "python <3.12a0,>=3.9",
         )
 
     def test_requires_python_tightens_a_floor_to_an_exact_minor(self) -> None:
@@ -169,14 +179,14 @@ class TestRequiresPythonTightening:
         config = _config(interpreter="py38", abi="none")
 
         assert python_dependencies(config, _metadata(requires_python="==3.9.*")) == (
-            "python >=3.9,<3.10.0a0",
+            "python <3.10a0,>=3.9",
         )
 
     def test_compatible_requires_python_leaves_a_pin_unchanged(self) -> None:
         config = _config(interpreter="cp39", abi="cp39")
 
         assert python_dependencies(config, _metadata(requires_python=">=3.5")) == (
-            "python >=3.9,<3.10.0a0",
+            "python <3.10a0,>=3.9",
         )
 
     def test_incompatible_requires_python_is_unsolvable(
@@ -202,7 +212,7 @@ class TestRequiresPythonTightening:
         config = _config(interpreter="cp313", abi="cp313")
 
         assert python_dependencies(config, _metadata(requires_python=">=3.13,<3.14")) == (
-            "python >=3.13,<3.14.0a0",
+            "python <3.14a0,>=3.13",
             "python_abi 3.13.* *_cp313",
         )
 
@@ -215,16 +225,19 @@ class TestRequiresPythonTightening:
 
 
 class TestRequiresPythonMicroLevelBoundaries:
-    def test_micro_level_floor_within_pinned_minor_is_not_a_false_mismatch(self) -> None:
+    def test_micro_level_floor_within_pinned_minor_tightens_the_lower_bound(self) -> None:
         """The exact shape reported in the v0.1.1 failure analysis:
         `cp39` implies `>=3.9,<3.10.0a0`, and `Requires-Python >=3.9.16`
         does intersect it (3.9.16 through the rest of 3.9.x) even though
-        `3.9.0` itself doesn't satisfy `>=3.9.16`.
+        `3.9.0` itself doesn't satisfy `>=3.9.16` -- per
+        docs/wheel_to_conda_dependencies.md, the combined range is used
+        as-is, micro precision and all, not rounded back down to the
+        pinned minor's own `.0` floor.
         """
         config = _config(interpreter="cp39", abi="cp39")
 
         assert python_dependencies(config, _metadata(requires_python=">=3.9.16")) == (
-            "python >=3.9,<3.10.0a0",
+            "python <3.10a0,>=3.9.16",
         )
 
     def test_micro_level_floor_genuinely_past_pinned_minor_still_mismatches(self) -> None:
@@ -239,27 +252,201 @@ class TestRequiresPythonMicroLevelBoundaries:
 
     def test_micro_level_floor_tightens_a_pure_python_floor_correctly(self) -> None:
         """A pure-python wheel's open floor (minor 8+) tightened against a
-        `Requires-Python` whose floor sits mid-minor-9: the result must
-        still start at minor 9, not be pushed to minor 10 by a floor
-        computed off `3.9.0` alone.
+        `Requires-Python` whose floor sits mid-minor-9: the combined range
+        keeps that micro-level floor rather than rounding it down to
+        minor 9's own `.0` release.
         """
         config = _config(interpreter="py38", abi="none")
 
         assert python_dependencies(config, _metadata(requires_python=">=3.9.16,<3.11")) == (
-            "python >=3.9,<3.11.0a0",
+            "python <3.11a0,>=3.9.16",
         )
 
     def test_micro_level_floor_and_ceiling_both_inside_the_pinned_minor(self) -> None:
         """Both `Requires-Python` bounds fall inside minor 9 without
         touching its `.0` release on either side; the pinned minor-9
-        wheel still intersects it, rendered the same as an untightened
-        pin since a MatchSpec can't express sub-minor precision.
+        wheel's combined range keeps both bounds exactly, even though the
+        MatchSpec now expresses sub-minor precision a bare filename tag
+        never could on its own.
         """
         config = _config(interpreter="cp39", abi="cp39")
 
         assert python_dependencies(config, _metadata(requires_python=">=3.9.16,<3.9.99")) == (
-            "python >=3.9,<3.10.0a0",
+            "python <3.9.99a0,>=3.9.16",
         )
+
+
+# --------------------------------------------------------------------------
+# `python_dependencies`: a non-Simplified `Requires-Python` -- the generic
+# combining fallback (docs/wheel_to_conda_dependencies.md's "Determining
+# the python version dependency"), which never raises
+# `PythonRangeMismatchError`, however contradictory the combination looks.
+# --------------------------------------------------------------------------
+
+
+class TestGenericCombiningFallback:
+    def test_floor_wheel_combines_with_a_non_simplified_requires_python(self) -> None:
+        """`<=3.11` alone (a single clause outside `{>=, <, ~=}`) isn't a
+        Simplified Requires-Python, so it's combined with the filename's
+        bare specifier and converted clause-by-clause (docs/matchspec.md's
+        Operator conversion) instead of going through the exact-range
+        algorithm -- each clause passes through as-is, sorted by its own
+        string spelling.
+        """
+        config = _config(interpreter="py38", abi="none")
+
+        assert python_dependencies(config, _metadata(requires_python="<=3.11")) == (
+            "python <=3.11,>=3.8",
+        )
+
+    def test_pinned_wheel_combines_with_a_non_simplified_requires_python(self) -> None:
+        """The filename's own contribution to the generic combination is
+        `~=3.9` for a pinned minor -- but `~=` is deprecated per CEP-29,
+        so the shared clause converter expands it into `>=3.9,<4.0a0`
+        (PEP 440's two-segment compatible-release form, bounded at the
+        next *major* version) rather than passing it through unexpanded.
+        """
+        config = _config(interpreter="cp39", abi="cp39")
+
+        assert python_dependencies(config, _metadata(requires_python="<=3.11")) == (
+            "python <=3.11,>=3.9,<4.0a0",
+        )
+
+    def test_pinned_wheel_with_a_contradictory_non_simplified_requires_python_does_not_raise(
+        self,
+    ) -> None:
+        """A pinned `cp315` wheel combined with `Requires-Python: <=3.10`
+        looks like it could never install -- but `<=3.10` isn't Simplified,
+        so per the doc, the generic fallback never raises
+        `PythonRangeMismatchError`, unlike the old minor-range-based
+        combiner.
+        """
+        config = _config(interpreter="cp315", abi="cp315")
+
+        assert python_dependencies(config, _metadata(requires_python="<=3.10")) == (
+            "python <=3.10,>=3.15,<4.0a0",
+            "python_abi 3.15.* *_cp315",
+        )
+
+
+# --------------------------------------------------------------------------
+# `exact_minor`: the single Python 3 minor a wheel's combined range is
+# restricted to, for pinning `python_version` in a `Requires-Dist` marker's
+# evaluation environment (docs/wheel_to_conda_dependencies.md's
+# `python_version` conditional-marker rule).
+# --------------------------------------------------------------------------
+
+
+class TestExactMinor:
+    def test_pinned_wheel_with_no_requires_python_is_its_own_minor(self) -> None:
+        config = _config(interpreter="cp39", abi="cp39")
+
+        assert exact_minor(config, _metadata()) == 9
+
+    def test_floor_wheel_with_no_requires_python_is_unrestricted(self) -> None:
+        config = _config(interpreter="py38", abi="none")
+
+        assert exact_minor(config, _metadata()) is None
+
+    def test_floor_wheel_tightened_by_requires_python_to_one_minor(self) -> None:
+        config = _config(interpreter="py38", abi="none")
+
+        assert exact_minor(config, _metadata(requires_python="==3.9.*")) == 9
+
+    def test_floor_wheel_tightened_by_requires_python_to_more_than_one_minor(self) -> None:
+        config = _config(interpreter="py38", abi="none")
+
+        assert exact_minor(config, _metadata(requires_python=">=3.9,<3.12")) is None
+
+    def test_pinned_wheel_tightened_by_a_sub_minor_requires_python_is_still_that_minor(
+        self,
+    ) -> None:
+        """Both bounds of the combined range sit strictly inside minor 9
+        -- `python_version` is still guaranteed to be `"3.9"` for any
+        environment satisfying the range, even though the range doesn't
+        span the whole minor.
+        """
+        config = _config(interpreter="cp39", abi="cp39")
+
+        assert exact_minor(config, _metadata(requires_python=">=3.9.16,<3.9.99")) == 9
+
+    def test_non_simplified_requires_python_is_unrestricted(self) -> None:
+        """The generic combining fallback produces a plain PEP 440
+        specifier string, not a `HalfOpenRange` -- there's no structured
+        range to check for a single-minor restriction, so this is always
+        treated as unrestricted.
+        """
+        config = _config(interpreter="cp39", abi="cp39")
+
+        assert exact_minor(config, _metadata(requires_python="<=3.11")) is None
+
+    def test_unsolvable_range_raises(self) -> None:
+        config = _config(interpreter="cp39", abi="cp39")
+
+        with pytest.raises(PythonRangeMismatchError):
+            exact_minor(config, _metadata(requires_python=">=3.10"))
+
+
+class TestHalfOpenRangeLowerBoundIsUnreachable:
+    """`_range_exact_minor`/`_range_specifier` are only ever called with a
+    `HalfOpenRange` `python_version_dependency` itself produced -- which
+    never has a `None` lower bound, since the filename side of the
+    combination always contributes a concrete one. Both functions still
+    guard against it defensively; this exercises that guard directly,
+    since nothing reachable through `python_dependencies`/`exact_minor`
+    can trigger it.
+    """
+
+    def test_range_exact_minor_rejects_a_none_lower_bound(self) -> None:
+        with pytest.raises(AssertionError, match="unreachable"):
+            _range_exact_minor(HalfOpenRange(lower=None, upper=None))
+
+    def test_range_specifier_rejects_a_none_lower_bound(self) -> None:
+        with pytest.raises(AssertionError, match="unreachable"):
+            _range_specifier(HalfOpenRange(lower=None, upper=None))
+
+
+# --------------------------------------------------------------------------
+# `python_dependencies`: a pre-release or local-labeled bound in the
+# combined Python version range -- rejected the same way any other
+# dependency's version would be (docs/matchspec.md's Decisions).
+# --------------------------------------------------------------------------
+
+
+class TestPreReleaseAndLocalBounds:
+    def test_prerelease_lower_bound_is_rejected_without_allow_pre(self) -> None:
+        config = _config(interpreter="py38", abi="none")
+
+        with pytest.raises(UnconvertableRequirementError, match="pre-release"):
+            python_dependencies(config, _metadata(requires_python=">=3.13.0rc1"))
+
+    def test_prerelease_lower_bound_is_permitted_with_allow_pre(self) -> None:
+        config = _config(interpreter="py38", abi="none")
+
+        assert python_dependencies(
+            config, _metadata(requires_python=">=3.13.0rc1"), allow_pre=True
+        ) == ("python >=3.13.0.rc1",)
+
+    def test_prerelease_upper_bound_is_rejected_without_allow_pre(self) -> None:
+        config = _config(interpreter="py38", abi="none")
+
+        with pytest.raises(UnconvertableRequirementError, match="pre-release"):
+            python_dependencies(config, _metadata(requires_python="<3.13.0rc1"))
+
+    def test_local_version_label_is_rejected_even_with_allow_pre(self) -> None:
+        config = _config(interpreter="py38", abi="none")
+
+        with pytest.raises(UnconvertableRequirementError, match="local version label"):
+            python_dependencies(config, _metadata(requires_python="!=3.13+local"), allow_pre=True)
+
+    def test_non_simplified_prerelease_is_rejected_without_allow_pre(self) -> None:
+        """The generic combining fallback's per-clause conversion applies
+        the same rejection as the exact-range branch.
+        """
+        config = _config(interpreter="py38", abi="none")
+
+        with pytest.raises(UnconvertableRequirementError, match="pre-release"):
+            python_dependencies(config, _metadata(requires_python=">=3.10,!=3.13.0rc1"))
 
 
 # --------------------------------------------------------------------------
@@ -522,7 +709,7 @@ class TestWheelDependenciesPlatformSpecific:
 
         assert result[CondaSubdir.LINUX_64].depends == (
             "requests ==1.0.0.rc1",
-            "python >=3.13,<3.14.0a0",
+            "python <3.14a0,>=3.13",
             "python_abi 3.13.* *_cp313",
             "__glibc >=2.17",
         )

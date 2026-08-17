@@ -83,13 +83,24 @@ class TestOperators:
         )
 
     def test_strict_less_than_gets_the_pre_release_carve_out_anchor(self) -> None:
-        """`<V` for a non-pre-release `V` anchors at `<V.dev0`, below
-        every pre-release of `V` -- see
+        """`<V` for a non-pre-release `V` anchors at `<Va0` -- an `a0`
+        pre-release tag glued directly onto `V`'s own conda-spelled
+        version, no separating dot -- below every pre-release of `V`. See
         `TestExclusiveComparatorPrePostReleaseCarveOut` in
-        `test_version_matchspec_equivalence.py` for the PEP 440 rule this
-        reproduces.
+        `test_version_matchspec_equivalence.py` for why the dot matters.
         """
-        assert pep508_to_matchspec("requests<2.0.0", (aggregator_mapper,)) == "requests <2.0.0.dev0"
+        assert pep508_to_matchspec("requests<2.0.0", (aggregator_mapper,)) == "requests <2.0.0a0"
+
+    def test_strict_less_than_carve_out_anchor_with_a_missing_patch_segment(self) -> None:
+        """The anchor glues `a0` onto `V` exactly as written, without
+        inserting a synthetic patch segment first -- `<2.0.a0` (not
+        `<2.0.0a0`) is what excludes every pre-release of the two-segment
+        boundary `2.0`, `2.0.0.dev0` included. See
+        `TestExclusiveComparatorPrePostReleaseCarveOut`'s
+        `test_strict_less_than_with_a_missing_patch_segment_still_excludes_a_same_shape_dev_release`
+        for why the synthetic-zero spelling is wrong.
+        """
+        assert pep508_to_matchspec("requests<2.0", (aggregator_mapper,)) == "requests <2.0a0"
 
     def test_strict_greater_than_gets_the_post_release_carve_out_exclusion(self) -> None:
         assert (
@@ -275,8 +286,7 @@ class TestVersionFormatting:
 
     def test_strict_less_than_carve_out_anchor_preserves_every_release_segment(self) -> None:
         assert (
-            pep508_to_matchspec("requests<1.2.3.4", (aggregator_mapper,))
-            == "requests <1.2.3.4.dev0"
+            pep508_to_matchspec("requests<1.2.3.4", (aggregator_mapper,)) == "requests <1.2.3.4a0"
         )
 
     def test_strict_greater_than_carve_out_exclusion_preserves_every_release_segment(
@@ -614,7 +624,7 @@ class TestMarkers:
         entry = 'numpy<1.25.0,>=1.24.0; python_full_version == "3.8.*"'
 
         assert pep508_to_matchspec(entry, (aggregator_mapper,)) == (
-            'numpy <1.25.0.dev0,>=1.24.0[when="python=3.8"]'
+            'numpy <1.25.0a0,>=1.24.0[when="python=3.8"]'
         )
 
     def test_extras_and_marker_combine_in_one_bracket(self) -> None:

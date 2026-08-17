@@ -158,9 +158,10 @@ def _convert_exclusive_comparator(
     Conda's plain ordered comparison has no such family exception, so a
     passthrough `<V`/`>V` is only correct when `V` already carries the
     suffix (pre, dev, or post) that makes the carve-out a no-op; otherwise
-    the boundary needs an explicit anchor (`<V` -> `<V.dev0`, below every
-    pre-release of `V`) or an extra exclusion clause (`>V` -> `>V,!=V.post*`,
-    since post-releases of `V` have no fixed upper anchor).
+    the boundary needs an explicit anchor (`<V` -> `<Va0`, an `a0`
+    pre-release tag glued directly onto `V` with no separating dot, below
+    every pre-release of `V`) or an extra exclusion clause (`>V` ->
+    `>V,!=V.post*`, since post-releases of `V` have no fixed upper anchor).
 
     `raw_version` is always a valid PEP 440 version here: unlike `===`,
     `packaging.specifiers.Specifier` itself rejects a non-PEP-440 version
@@ -172,7 +173,7 @@ def _convert_exclusive_comparator(
     if operator == "<":
         if version.is_prerelease:
             return [f"<{formatted}"]
-        return [f"<{formatted}.dev0"]
+        return [f"<{formatted}a0"]
     if version.dev is not None or version.post is not None:
         return [f">{formatted}"]
     return [f">{formatted}", f"!={formatted}.post*"]

@@ -1,5 +1,5 @@
 # Introduction
-Reroll is an exploratory codebase which generates conda repodata.json-like entries for a wheel. It's uploaded as `py-reroll` on pypi.org
+Reroll is an exploratory codebase which generates conda repodata.json-like entries for a wheel. It's uploaded as `py-reroll` on pypi.org. Reroll has a **99.9%** conversion success rate [[stats](#stats)]
 
 ```py
 from reroll import reroll
@@ -51,6 +51,61 @@ If you ever have a PEP-440 style requirement and want to turn it into a matchspe
 >>> to_matchspec('packageA ; python_version < "3.9"')
 'packagea[when="python<3.9.0a0"]'
 ```
+
+# Stats
+* Reroll can successfully convert 99.9% of supported wheels into repodata
+* Reroll considers 86.1% of all wheels on pypi as supported
+
+## What constitutes a supported wheel?
+Reroll supports 86.1% of all wheels on pypi. As an aspiration, reroll aims to support any wheel you could run by taking a conda environment from the modern supported platforms (linux-64, linux-aarch4, osx-64, osx-arm64, win-64, win-arm64) and then pip or uv would generally dry-run install the wheel (assuming its dependencies are met).
+
+Since this would involve downloading and installing a lot of (perhaps dodgy) wheels, instead, reroll has the following rules that approximate this level of support
+* The wheel must be target python 3.4 and up
+* It must support CPython (not pypy or other interpreters)
+* It must have a valid wheel filename, and metadata
+* Older metadata (conforming to previous PEP specs or otherwise) are allowed if they are repairable by uv repair mechanisms
+* The metadata must be syntactically valid and consistent with other metadata, as well as the filename
+* Wheels targeting linux must be modern, manylinux-based.
+
+When reroll encounters an unsupported wheel, it raises a RerollScopeError for reroll's policy decisions (python 3.4, platform, manylinux etc), or a RerollInvalidWheel error for parsing or semantic problems with the metadata. Reroll considers any parsing error fatal and will not skip or suppress partial failures.
+
+## Current reroll failures
+Reroll supports 99.9% of supported wheels. For the remaining 0.11%, why does reroll fail? Half of all failures are due to local build tags (like `+cpu`) which conda does not have direct support for. The other half are a long tail of issues Reroll would never directly support (too long filenames, url's in dependencies and edge cases which need further exploration (~= with python_version).
+
+| sub category | description | % of all supported wheels |
+|---|---|---|
+| `UnconvertableRequirementError` | PEP 440 local version label (torch/ipex-llm/vllm-cpu `+cpu`/`+xpu` hardware variants) | 0.061% |
+| `InvalidCondaNameError` | name >64 chars (SEO-spam PyPI project names) | 0.012% |
+| `UnconvertableRequirementError` | illegal conda extra name (CEP-29) | 0.006% |
+| `UnconvertableMarkerError` | unsupported comparator (`~=`) for `python_version(_full)` | 0.006% |
+| `UnconvertableMarkerError` | `python_version` literal not a valid version (e.g. `'2.7.*'`, `'3.x'`, `'dev'`) | 0.006% |
+| `UnconvertableMarkerError` | unpermitted key (`platform_release`/`_version`/`_machine`/`sys_platform`/`platform_python_implementation`) | 0.005% |
+| `UnconvertableRequirementError` | `amulet-compiler-version` numeric-overflow version | 0.004% |
+| `UnconvertableMarkerError` | `python_version` literal not major.minor precision | 0.002% |
+| `UnconvertableMarkerError` | `in`/`not in` marker unsupported (no matchspec equivalent to set membership) | 0.002% |
+| `UnconvertablePythonVersionEqualityError` | `python_version ==`/`!=` a non-major.minor literal | 0.001% |
+| `UnconvertableRequirementError` | direct URL reference | 0.001% |
+| `UnresolvedCondaNameError` | 4 unresolved dep names (`alchemiscale`, `oasis`, `nr-config`, `sktools`) | 0.000% |
+| `InvalidCondaNameError` | homoglyph/Cyrillic lookalike name (`taаmo`) | 0.000% |
+
+## Unsupported wheels breakdown
+Of the 14% of wheels that markerpry does not consider supported, they fail for the following reasons:
+Many of these reasons are unresolvable problems with the wheels themselves, and a few categories are particular reroll restrictions to prioritize initial support of modern systems.
+
+| sub category | description | % of all wheels |
+|---|---|---|
+| `UnsupportedPlatformError` | Wheel's platform tag is out of policy scope (e.g. musllinux, 32-bit Windows/Linux, iOS/Android, wasm, non-manylinux glibc, or an unsupported CPU arch) | 9.605% |
+| `InvalidInterpreterTagError` | Wheel filename has a malformed/unrecognized interpreter tag (e.g. PyPy `pp37`) | 2.228% |
+| `UnsupportedInterpreterError` | Wheel targets a non-CPython interpreter major (e.g. `py2`, no CPython tag at all) | 1.472% |
+| `PythonRangeMismatchError` | Wheel filename's implied CPython version range doesn't intersect the sdist's declared `Requires-Python` | 0.246% |
+| `InvalidPythonRequirementRangeError` | `Requires-Python` is not a contiguous Python 3.x minor-version range (e.g. `==2.7`) | 0.204% |
+| `InvalidRequirementError` | A `Requires-Dist` entry fails to parse as a PEP 508 requirement string | 0.059% |
+| `UnsupportedInterpreterVersionError` | Wheel targets CPython < 3.4 (below reroll's minimum supported version) | 0.044% |
+| `MetadataFilenameMismatchError` | METADATA's Name/Version disagrees with the wheel filename's Name/Version | 0.011% |
+| `InvalidVersionSpecifierError` | A version specifier fails to parse as PEP 440 (e.g. `>-3.6`) | 0.008% |
+| `InvalidAbiTagError` | Wheel filename has a malformed/unrecognized ABI tag | 0.006% |
+| `InvalidFilenameError` | Wheel filename doesn't parse at all (wrong number of `-`-separated parts, etc.) | 0.002% |
+| `InvalidMetadataError` | METADATA fails pydantic validation (e.g. an unparseable `Version:` field) | 0.000% |
 
 # Acknowledgements
 I'm so grateful to have learned much about this topic from @jjhelmus. Together we created the original prototype for this concept several years ago, before conda had any support for conditional dependencies, optional dependencies (extras), or .whl support in repodata.json. The reroll codebase in a large sense is just an outgrowth of the original [conda-whl-channel](https://github.com/anaconda/conda-whl-channel) prototype to explore repodata conversion at scale.

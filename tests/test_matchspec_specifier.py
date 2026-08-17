@@ -21,7 +21,16 @@ class TestBasics:
         assert specifier_to_matchspec(f"{operator}2.0.0") == f"{operator}2.0.0"
 
     def test_multiple_specifiers_are_joined_in_canonical_order(self) -> None:
-        assert specifier_to_matchspec(">=1.0.0,<2.0.0") == "<2.0.0a0,>=1.0.0"
+        assert specifier_to_matchspec(">=1.0.0,<2.0.0") == ">=1.0.0,<2.0.0a0"
+
+    def test_canonical_order_spans_every_operator_category(self) -> None:
+        """Lower bounds, then upper bounds, then pins, then exclusions --
+        regardless of the clauses' own alphabetical spelling or the order
+        they were given in.
+        """
+        assert specifier_to_matchspec("!=5.0.0,==3.0.0,<4.0.0,>=1.0.0") == (
+            ">=1.0.0,<4.0.0a0,==3.0.0,!=5.0.0"
+        )
 
     def test_multiple_specifiers_with_the_same_operator_sort_lexicographically(self) -> None:
         assert specifier_to_matchspec("!=1.0.0,!=2.0.0") == "!=1.0.0,!=2.0.0"

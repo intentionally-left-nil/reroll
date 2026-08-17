@@ -19,15 +19,39 @@ def specifier_to_matchspec(specifiers: str | SpecifierSet, *, allow_pre: bool = 
     already is (`SpecifierSet(specifiers)`), and propagates
     `packaging.specifiers.InvalidSpecifier` if it doesn't parse.
 
+    Multiple clauses are joined in canonical order: lower bounds
+    (`>=`/`>`) first, then upper bounds (`<=`/`<`), then pins
+    (`==`/`~=`/`===`), then exclusions (`!=`) -- ties within the same
+    operator sort alphabetically by the clause's own string spelling.
+
     Raises `UnconvertableRequirementError` if any specifier has a local
     version label, or is a pre-release version and `allow_pre` is unset.
     """
     if isinstance(specifiers, str):
         specifiers = SpecifierSet(specifiers)
     parts: list[str] = []
-    for specifier in sorted(specifiers, key=str):
+    for specifier in sorted(specifiers, key=_sort_key):
         parts.extend(_convert_specifier(specifier, allow_pre=allow_pre))
     return ",".join(parts)
+
+
+_OPERATOR_RANK = {
+    ">=": 0,
+    ">": 0,
+    "<=": 1,
+    "<": 1,
+    "==": 2,
+    "~=": 2,
+    "===": 2,
+    "!=": 3,
+}
+"""Canonical clause order for `specifier_to_matchspec`: lower bounds, then
+upper bounds, then pins, then exclusions.
+"""
+
+
+def _sort_key(specifier: Specifier) -> tuple[int, str]:
+    return (_OPERATOR_RANK[specifier.operator], str(specifier))
 
 
 def _convert_specifier(specifier: Specifier, *, allow_pre: bool) -> list[str]:

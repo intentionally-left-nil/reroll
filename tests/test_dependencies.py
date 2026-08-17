@@ -87,9 +87,9 @@ class TestNoRequiresPython:
     @pytest.mark.parametrize(
         ("interpreter", "abi", "expected_matchspec"),
         [
-            ("cp37", "none", "python <3.8a0,>=3.7"),
-            ("cp37", "cp37", "python <3.8a0,>=3.7"),
-            ("cp39", "cp39", "python <3.10a0,>=3.9"),
+            ("cp37", "none", "python >=3.7,<3.8a0"),
+            ("cp37", "cp37", "python >=3.7,<3.8a0"),
+            ("cp39", "cp39", "python >=3.9,<3.10a0"),
         ],
     )
     def test_pinned_python_only_below_310(
@@ -102,10 +102,10 @@ class TestNoRequiresPython:
     @pytest.mark.parametrize(
         ("minor", "expected_python", "expected_python_abi"),
         [
-            (10, "python <3.11a0,>=3.10", "python_abi 3.10.* *_cp310"),
-            (11, "python <3.12a0,>=3.11", "python_abi 3.11.* *_cp311"),
-            (12, "python <3.13a0,>=3.12", "python_abi 3.12.* *_cp312"),
-            (13, "python <3.14a0,>=3.13", "python_abi 3.13.* *_cp313"),
+            (10, "python >=3.10,<3.11a0", "python_abi 3.10.* *_cp310"),
+            (11, "python >=3.11,<3.12a0", "python_abi 3.11.* *_cp311"),
+            (12, "python >=3.12,<3.13a0", "python_abi 3.12.* *_cp312"),
+            (13, "python >=3.13,<3.14a0", "python_abi 3.13.* *_cp313"),
         ],
     )
     def test_regular_gil_emits_python_abi_from_310(
@@ -122,7 +122,7 @@ class TestNoRequiresPython:
         config = _config(interpreter="cp313", abi="cp313t")
 
         assert python_dependencies(config, _metadata()) == (
-            "python <3.14a0,>=3.13",
+            "python >=3.13,<3.14a0",
             "python_abi 3.13.* *_cp313t",
         )
 
@@ -135,7 +135,7 @@ class TestNoRequiresPython:
         config = _config(interpreter="cp310", abi="none")
 
         assert python_dependencies(config, _metadata()) == (
-            "python <3.11a0,>=3.10",
+            "python >=3.10,<3.11a0",
             "python_abi 3.10.* *_cp310",
         )
 
@@ -167,7 +167,7 @@ class TestRequiresPythonTightening:
         config = _config(interpreter="py38", abi="none")
 
         assert python_dependencies(config, _metadata(requires_python=">=3.9,<3.12")) == (
-            "python <3.12a0,>=3.9",
+            "python >=3.9,<3.12a0",
         )
 
     def test_requires_python_tightens_a_floor_to_an_exact_minor(self) -> None:
@@ -179,14 +179,14 @@ class TestRequiresPythonTightening:
         config = _config(interpreter="py38", abi="none")
 
         assert python_dependencies(config, _metadata(requires_python="==3.9.*")) == (
-            "python <3.10a0,>=3.9",
+            "python >=3.9,<3.10a0",
         )
 
     def test_compatible_requires_python_leaves_a_pin_unchanged(self) -> None:
         config = _config(interpreter="cp39", abi="cp39")
 
         assert python_dependencies(config, _metadata(requires_python=">=3.5")) == (
-            "python <3.10a0,>=3.9",
+            "python >=3.9,<3.10a0",
         )
 
     def test_incompatible_requires_python_is_unsolvable(
@@ -212,7 +212,7 @@ class TestRequiresPythonTightening:
         config = _config(interpreter="cp313", abi="cp313")
 
         assert python_dependencies(config, _metadata(requires_python=">=3.13,<3.14")) == (
-            "python <3.14a0,>=3.13",
+            "python >=3.13,<3.14a0",
             "python_abi 3.13.* *_cp313",
         )
 
@@ -237,7 +237,7 @@ class TestRequiresPythonMicroLevelBoundaries:
         config = _config(interpreter="cp39", abi="cp39")
 
         assert python_dependencies(config, _metadata(requires_python=">=3.9.16")) == (
-            "python <3.10a0,>=3.9.16",
+            "python >=3.9.16,<3.10a0",
         )
 
     def test_micro_level_floor_genuinely_past_pinned_minor_still_mismatches(self) -> None:
@@ -259,7 +259,7 @@ class TestRequiresPythonMicroLevelBoundaries:
         config = _config(interpreter="py38", abi="none")
 
         assert python_dependencies(config, _metadata(requires_python=">=3.9.16,<3.11")) == (
-            "python <3.11a0,>=3.9.16",
+            "python >=3.9.16,<3.11a0",
         )
 
     def test_micro_level_floor_and_ceiling_both_inside_the_pinned_minor(self) -> None:
@@ -272,7 +272,7 @@ class TestRequiresPythonMicroLevelBoundaries:
         config = _config(interpreter="cp39", abi="cp39")
 
         assert python_dependencies(config, _metadata(requires_python=">=3.9.16,<3.9.99")) == (
-            "python <3.9.99a0,>=3.9.16",
+            "python >=3.9.16,<3.9.99a0",
         )
 
 
@@ -290,13 +290,13 @@ class TestGenericCombiningFallback:
         Simplified Requires-Python, so it's combined with the filename's
         bare specifier and converted clause-by-clause (docs/matchspec.md's
         Operator conversion) instead of going through the exact-range
-        algorithm -- each clause passes through as-is, sorted by its own
-        string spelling.
+        algorithm -- each clause passes through as-is, in canonical
+        (lower-bound-first) order.
         """
         config = _config(interpreter="py38", abi="none")
 
         assert python_dependencies(config, _metadata(requires_python="<=3.11")) == (
-            "python <=3.11,>=3.8",
+            "python >=3.8,<=3.11",
         )
 
     def test_pinned_wheel_combines_with_a_non_simplified_requires_python(self) -> None:
@@ -709,7 +709,7 @@ class TestWheelDependenciesPlatformSpecific:
 
         assert result[CondaSubdir.LINUX_64].depends == (
             "requests ==1.0.0.rc1",
-            "python <3.14a0,>=3.13",
+            "python >=3.13,<3.14a0",
             "python_abi 3.13.* *_cp313",
             "__glibc >=2.17",
         )

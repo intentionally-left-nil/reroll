@@ -73,7 +73,7 @@ class TestNoRequiresDist:
 
         result = _dependencies(config, metadata, (aggregator_mapper,))
 
-        assert result.depends == ("python <3.14a0,>=3.13", "python_abi 3.13.* *_cp313")
+        assert result.depends == ("python >=3.13,<3.14a0", "python_abi 3.13.* *_cp313")
         assert result.extra_depends == {}
 
     def test_unsolvable_python_range_raises(self) -> None:
@@ -205,7 +205,7 @@ class TestResidualMarker:
 
         assert result.depends == (
             "requests >=2.0.0",
-            "python <3.14a0,>=3.13",
+            "python >=3.13,<3.14a0",
             "python_abi 3.13.* *_cp313",
         )
 
@@ -216,7 +216,7 @@ class TestResidualMarker:
         result = _dependencies(config, metadata, (aggregator_mapper,))
 
         assert result.depends == (
-            "python <3.14a0,>=3.13",
+            "python >=3.13,<3.14a0",
             "python_abi 3.13.* *_cp313",
         )
 
@@ -244,7 +244,7 @@ class TestResidualMarker:
 
         assert result.depends == (
             'requests >=2.0.0[when="python<3.10.0a0"]',
-            "python <=3.11,>=3.8",
+            "python >=3.8,<=3.11",
         )
 
 

@@ -251,10 +251,21 @@ class TestExclusiveComparatorPrePostReleaseCarveOut:
       itself a post-release or dev-release.
 
     (`packaging`'s `_ranges.standard_ranges` implements exactly this; see
-    the `>V`/`<V` branches.) `_convert_exclusive_comparator` reproduces it:
-    `<V` anchors at `<V.dev0` (below every pre-release of `V`) when `V`
-    isn't itself a pre-release, and `>V` adds a `!=V.post*` exclusion
-    clause when `V` is neither a post- nor a dev-release.
+    the `>V`/`<V` branches.) `_convert_exclusive_comparator` reproduces
+    the `<V` side by gluing a bare `a0` pre-release tag directly onto
+    `V`'s own conda-spelled version, with no separating dot (`<V` ->
+    `<Va0`) -- not the dotted `<V.a0` or a synthetic-zero `<V.0a0` a
+    reader might expect from the `~=` expansion's anchor. The dot matters:
+    conda orders a `dev` tag *above* a same-position `a`/`b`/`rc` tag when
+    they're compared as separate dot-delimited parts, so a dotted anchor
+    (or one with an inserted zero segment) leaves a same-shape dev-release
+    of the boundary unexcluded; gluing `a0` straight onto `V`'s last
+    digit instead folds the comparison into `V`'s own release digits,
+    which *does* sort below every pre-release spelling, verified directly
+    against `rattler.Version`'s ordering rather than assumed. `>V` is
+    unaffected by any of this -- it adds a `!=V.post*` exclusion clause
+    when `V` is neither a post- nor a dev-release, which needs no anchor
+    at all.
     """
 
     def test_strict_less_than_excludes_a_dev_release_of_the_boundary(self) -> None:
@@ -265,6 +276,21 @@ class TestExclusiveComparatorPrePostReleaseCarveOut:
 
     def test_strict_less_than_still_includes_versions_below_the_boundary(self) -> None:
         assert_matchspec_agrees_with_pip("<1.0.0", ["0.9.9", "1.0.0a0", "0.9.9.post1"])
+
+    def test_strict_less_than_with_a_missing_patch_segment_still_excludes_a_same_shape_dev_release(
+        self,
+    ) -> None:
+        """The motivating case for gluing `a0` with no dot at all: `V`
+        (`2.0`) has no patch segment of its own, so the anchor is `<2.0a0`,
+        not `<2.0.0a0`. A dotted or zero-padded anchor would leave
+        `2.0.dev0` -- a dev-release with the same two-segment shape as `V`
+        -- unexcluded, since conda would then compare `dev0` against
+        `a0`/`0a0` as sibling dot-delimited parts (where `dev` sorts
+        above `a`) rather than folding into `V`'s own release digits.
+        """
+        assert_matchspec_agrees_with_pip(
+            "<2.0", ["2.0.dev0", "2.0.0.dev0", "2.0a0", "2.0", "1.9"], allow_pre=True
+        )
 
     def test_strict_less_than_with_a_pre_release_boundary_is_a_plain_passthrough(self) -> None:
         """`V` itself a pre-release (`1.0.0rc1`) needs no carve-out --

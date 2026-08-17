@@ -63,6 +63,13 @@ Therefore, putting all this together leads to a strong reason to raise `Unconver
 To mimic the concept of labels, a repodata author might intend for a certain channel to contain -alpha, -beta, -rc packages in it. In this case an `allow_pre` flag can toggle this behavior
 One final note is that `allow_pre` will apply equally to both package versions, as well as version dependencies. This keeps things consistent (channels can either have pre-release packages and rely on other pre-release packages, or they can't)
 
+## Pre-release and the < comparison
+Due to the differences in behavior for prereleases, when a PEP-style comparison uses <, such as `<3.13`, it is user-intended to skip any pre-releases, regardless of the specific PEP-440 style ordering (because --pre wouldn't consider the packages in the first place).
+
+Thus, we are deliberately going to break semantic equivalency with PEP-440 to preserve user intention regarding < operators. The matchspec code should convert `<3.13` to `<3.13.0a0` to specify the very bottom range of matchspec. Always append a0 directly with no separator, not .0a0 or .a0. Matchspec treats 3.13a0 as valid and it matches the behavior we expect.
+
+If the PEP comparison deliberately includes a pre-release, like `<3.13.0rc2`, then do the conversion preserving the rc tag (e.g. `<3.13.0.rc2`), assuming that `--allow-pre` is true. If `--allow-pre` is false, then consistent with all cases of `--allow-pre` a < specifier with .rc2 would cause an error.
+
 ## Post-release
 Post releases are fine, however, because they are intended to take priority over an existing wheel. So, any pypi dependency like `mypackage 1.0.0.post1` is accepted, (and the package with that release would also be accepted by the filename command)
 

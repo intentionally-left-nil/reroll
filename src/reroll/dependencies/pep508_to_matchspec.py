@@ -7,14 +7,13 @@ from __future__ import annotations
 
 from markerpry import Node, parse_marker
 from packaging.requirements import InvalidRequirement, Requirement
-from packaging.specifiers import Specifier, SpecifierSet
+from packaging.specifiers import SpecifierSet
 from packaging.utils import NormalizedName, canonicalize_name
-from packaging.version import InvalidVersion, Version
 from rattler import MatchSpec
 from rattler.exceptions import InvalidMatchSpecError
 
 from reroll.dependencies.marker_conversion import UnconvertableMarkerError, marker_condition
-from reroll.dependencies.version_format import format_version
+from reroll.dependencies.matchspec_specifier import specifier_to_matchspec
 from reroll.errors import InvalidRequirementError, UnconvertableRequirementError
 from reroll.name_mapping import NameMappers, map_name
 
@@ -71,7 +70,7 @@ def pep508_to_matchspec(
             f"cannot convert {entry!r}: it has a direct URL reference"
         )
     conda_name = map_name(requirement.name, mappers)
-    version_parts = _convert_specifiers(requirement.specifier, entry, allow_pre=allow_pre)
+    version_clause = _specifier_to_matchspec(requirement.specifier, entry, allow_pre=allow_pre)
     extras = {canonicalize_name(extra) for extra in requirement.extras}
     if extras:
         _reject_invalid_extras(extras, entry)
@@ -83,9 +82,7 @@ def pep508_to_matchspec(
         condition = _marker_condition(marker_node, entry, abi3_upper_bound=abi3_upper_bound)
         brackets.append(f'when="{condition}"')
 
-    name_and_version = (
-        conda_name if not version_parts else f"{conda_name} {','.join(version_parts)}"
-    )
+    name_and_version = conda_name if not version_clause else f"{conda_name} {version_clause}"
     bracket_suffix = f"[{','.join(brackets)}]" if brackets else ""
     matchspec = f"{name_and_version}{bracket_suffix}"
 
@@ -98,96 +95,19 @@ def pep508_to_matchspec(
     return matchspec
 
 
-def _convert_specifiers(specifiers: SpecifierSet, entry: str, *, allow_pre: bool) -> list[str]:
-    parts: list[str] = []
-    for specifier in sorted(specifiers, key=str):
-        parts.extend(_convert_specifier(specifier, entry, allow_pre=allow_pre))
-    return parts
+def _specifier_to_matchspec(specifiers: SpecifierSet, entry: str, *, allow_pre: bool) -> str:
+    """`specifier_to_matchspec(specifiers, allow_pre=allow_pre)`, with
+    `entry` folded into the message on failure.
 
-
-def _convert_specifier(specifier: Specifier, entry: str, *, allow_pre: bool) -> list[str]:
-    """One PEP 440 specifier's contribution to a MatchSpec's version
-    clause -- most contribute a single `<op><version>` clause, but `~=`
-    (deprecated per CEP-29) expands into an explicit `>=`/`<` pair.
-
-    Raises `UnconvertableRequirementError` if `entry`'s whole conversion
-    must be rejected: a local version label, or a pre-release version with
-    `allow_pre` unset.
+    Reraises the same `UnconvertableRequirementError` instance rather than
+    constructing a new one: that error already logged itself at
+    construction, and a fresh instance would log the one failure twice.
     """
-    if specifier.operator == "~=":
-        return _expand_compatible_release(specifier.version, entry, allow_pre=allow_pre)
-    if specifier.operator in ("==", "!=") and specifier.version.endswith(".*"):
-        if specifier.operator == "!=":
-            return [f"!={specifier.version}"]
-        return [f"={specifier.version[:-2]}"]
-    if specifier.operator in ("<", ">"):
-        return _convert_exclusive_comparator(
-            specifier.operator, specifier.version, entry, allow_pre=allow_pre
-        )
-    operator = "==" if specifier.operator == "===" else specifier.operator
     try:
-        version = Version(specifier.version)
-    except InvalidVersion:
-        return [f"{operator}{specifier.version}"]
-    _reject_unsupported_version(version, entry, allow_pre=allow_pre)
-    return [f"{operator}{format_version(version)}"]
-
-
-def _expand_compatible_release(raw_version: str, entry: str, *, allow_pre: bool) -> list[str]:
-    """`~=X.Y.Z`'s expansion into `>=X.Y.Z,<X.(Y+1).0a0` (docs/matchspec.md's
-    Operator conversion) -- the version literal sans its last release
-    segment, bumped by one, anchored at `.0a0` so a pre-release of that
-    boundary lands on the lower side of the range.
-    """
-    version = Version(raw_version)
-    _reject_unsupported_version(version, entry, allow_pre=allow_pre)
-    prefix = version.release[:-1]
-    bumped = prefix[:-1] + (prefix[-1] + 1,)
-    epoch_prefix = f"{version.epoch}!" if version.epoch else ""
-    upper_release = ".".join(str(segment) for segment in bumped)
-    return [f">={format_version(version)}", f"<{epoch_prefix}{upper_release}.0a0"]
-
-
-def _convert_exclusive_comparator(
-    operator: str, raw_version: str, entry: str, *, allow_pre: bool
-) -> list[str]:
-    """`<V`/`>V`'s PEP 440 carve-out (the "Version specifiers" spec's
-    Exclusive ordered comparison): `<V` excludes every pre-release of `V`
-    unless `V` is itself a pre-release, and `>V` excludes every
-    post-release of `V` unless `V` is itself a post-release or dev-release.
-    Conda's plain ordered comparison has no such family exception, so a
-    passthrough `<V`/`>V` is only correct when `V` already carries the
-    suffix (pre, dev, or post) that makes the carve-out a no-op; otherwise
-    the boundary needs an explicit anchor (`<V` -> `<Va0`, an `a0`
-    pre-release tag glued directly onto `V` with no separating dot, below
-    every pre-release of `V`) or an extra exclusion clause (`>V` ->
-    `>V,!=V.post*`, since post-releases of `V` have no fixed upper anchor).
-
-    `raw_version` is always a valid PEP 440 version here: unlike `===`,
-    `packaging.specifiers.Specifier` itself rejects a non-PEP-440 version
-    for `<`/`>` before this function ever sees it.
-    """
-    version = Version(raw_version)
-    _reject_unsupported_version(version, entry, allow_pre=allow_pre)
-    formatted = format_version(version)
-    if operator == "<":
-        if version.is_prerelease:
-            return [f"<{formatted}"]
-        return [f"<{formatted}a0"]
-    if version.dev is not None or version.post is not None:
-        return [f">{formatted}"]
-    return [f">{formatted}", f"!={formatted}.post*"]
-
-
-def _reject_unsupported_version(version: Version, entry: str, *, allow_pre: bool) -> None:
-    if version.local is not None:
-        raise UnconvertableRequirementError(
-            f"cannot convert {entry!r}: it has a local version label"
-        )
-    if version.is_prerelease and not allow_pre:
-        raise UnconvertableRequirementError(
-            f"cannot convert {entry!r}: it is a pre-release and allow_pre is unset"
-        )
+        return specifier_to_matchspec(specifiers, allow_pre=allow_pre)
+    except UnconvertableRequirementError as exc:
+        exc.args = (f"cannot convert {entry!r}: {exc}",)
+        raise
 
 
 def _reject_invalid_extras(extras: set[NormalizedName], entry: str) -> None:

@@ -274,7 +274,7 @@ class TestArchSpecificRecord:
         assert record.noarch is None
         assert record.build == "cp313_cp313_manylinux_2_17_x86_64_0"
         assert record.depends == (
-            "python >=3.13,<3.14.0a0",
+            "python >=3.13,<3.14a0",
             "python_abi 3.13.* *_cp313",
             "__glibc >=2.17",
         )

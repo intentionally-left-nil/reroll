@@ -25,19 +25,19 @@ def conditional_dependency(
     marker: Node,
     *,
     extra: str,
-    python_version: tuple[int, int | None],
+    python_minor: int | None,
     subdir: CondaSubdir | None,
 ) -> str | None:
     """Reduce `marker` -- one `Requires-Dist` entry's marker -- against a
-    candidate environment built from `python_version`, `extra`, and
-    `subdir`.
+    candidate environment built from `python_minor`, `extra`, and `subdir`.
 
-    `python_version` is `(floor, ceiling)`, the shape
-    `reroll.filename.python_requirement.minor_range` returns: `python_version`/
-    `python_full_version`/`implementation_version` are only fixed to a
-    specific minor when this range covers exactly one (`ceiling == floor + 1`);
-    otherwise those keys are left out of the environment, and a marker
-    referencing them converts as-is instead of resolving.
+    `python_minor` is the single Python 3 minor the wheel's combined
+    Python version range is restricted to
+    (`reroll.dependencies.python.exact_minor`), or `None` if it isn't
+    restricted to exactly one: `python_version`/`python_full_version`/
+    `implementation_version` are only fixed in the environment when
+    `python_minor` is known; otherwise those keys are left out, and a
+    marker referencing them converts as-is instead of resolving.
 
     `extra` is `""` for the base dependency, or one of `find_extras`'
     normalized extra names -- either way, the value `marker`'s `extra`
@@ -65,9 +65,10 @@ def conditional_dependency(
     dependency has no possible conda representation, and the whole record
     should not be emitted.
     """
-    minor = _exact_minor(python_version)
     environment = (
-        noarch_environment(minor) if subdir is None else arch_specific_environment(minor, subdir)
+        noarch_environment(python_minor)
+        if subdir is None
+        else arch_specific_environment(python_minor, subdir)
     )
     unreducible = _unreducible_full_version_keys(marker)
     environment = {key: value for key, value in environment.items() if key not in unreducible}
@@ -92,11 +93,6 @@ def conditional_dependency(
             f"key(s) {sorted(unpermitted)} after evaluation"
         )
     return str(tighten_ranges(partial_evaluation))
-
-
-def _exact_minor(python_version: tuple[int, int | None]) -> int | None:
-    floor, ceiling = python_version
-    return floor if ceiling == floor + 1 else None
 
 
 def _unreducible_full_version_keys(marker: Node) -> frozenset[str]:

@@ -18,7 +18,7 @@ For the python dependency, this means that the wheel filename (including the pyt
 
 Our algorithm for converting wheel information into conda `depends` is:
 1. Determine if the python/abi combo requires an exact minor version of python, or a floor of python, following the [wheel_filename.md](./wheel_filename.md#python-tag) table
-2. If the wheel metada contains `Requires-Python`, intersect this range with the filename range. If the intersection is solvable, tighten the range to the intersection of both values. If the intersection is not solvable, raise `PythonRangeMismatchError`
+2. If the wheel metada contains `Requires-Python`, intersect this specifier (if feasible) with the filename range. If the intersection is solvable, tighten the range to the intersection of both values. See [Determining the python version dependency](#Determining-the-python-version-dependency) for specific details
 3. Generate a conda `depends` for python following the below rules for various cases
 
 # Calculating extras
@@ -92,7 +92,6 @@ All free threaded builds are >= 3.13, so this is just a small modification to th
 ## Wheel is a compiled wheel for a CPython floor, and abi3 or abi3t
 This is an error. The [wheel_filename](./wheel_filename.md#abi-explosion) docs specifically solve this problem by exploding out the value of python to a specific version, because the dependencies cannot be expressed in conda otherwise. If the dependency generation code sees `abi3` or `abi3t` it should error out as this is reroll's bug, not a caller bug or wheel issue
 
-
 # How conda repodata expresses dependencies
 Traditional conda repodata (v1, predating wheels) expresses repodata dependencies via two keys, `constrains`, and `depends`.
 Both of these keys are arrays of conda [MatchSpec (CEP29)](https://conda.org/learn/ceps/cep-0029/)
@@ -148,8 +147,42 @@ In a lot of ways, the uv mechanics don't really matter too much for us when it c
 
 Note that `uv.lock` isn't really a part of this decision - uv.lock is about which versions of the packages to use, not necessarily the python version (as best as I can tell).
 
-# Determining if a wheel can be installed into a python environment
-Now that the python environment is always known, both installers first do a sanity check against the wheel filename, and early exit if the filename is not compatible. Otherwise, the `Requires-Python` is consulted, and finally the dependencies are checked for validity.
+# Determining the python version dependency
+The python version is an intersection of the requirements from the filename (either an exact major.minor, or a major.minor floor), and `Requires-Python`. `Requires-Python` can be any arbitrary SpecifierSet, but typically it is a simple range evaluator like `>=3.11`
+
+On the PEP side, we can correctly express the combined dependency with converting the filename requirement into a specifier (either >= major.minor or ~= major.minor), and then combining that with Requires-Python with a comma. So `py311-none-any` with `Requires-Python: !=3.11.2,>=3.10,<4` becomes `>=3.11,!=3.11.2,>=3.10,<4` and then it is up to the matchspec code to convert this to a proper matchspec equivalent later.
+
+However, the _common_ case for Requires-Python is to have a simple SpecifierSet which produces a simple contiguous range (perhaps unbounded on one end), such as `Requires-Python: >=3.11`. Although we could produce the combined specifier of `>=3.11,>=3.11` (again with `py11-none-any` as the hypothetical), this is redundant and also makes the specifier visually unpleasing to read. Additionally, we want to detect simple cases where the Requires-Python range is wholly disjoint with the filename specifier, so we can raise `PythonRangeMismatchError`
+
+Therefore, we can first have an algorithm for "Simplified Requires-Python" specifiers which match a reduced grammar (accounting for the vast majority of in-the-wild wheels), perform range-caluclation and simplification logic, and emit a unified python dependency (or raise if the range is disjoint). Other wheels which do not have a Simplified Requires-Python are parsed with the generic combining-logic above, and will never raise a `PythonRangeMismatchError`
+
+## Simplified Requires-Python requirements
+A simplified Requires-Python Specifier must fit into one of the following categories
+* A single `>=`, `<`, or `~=` operator (e.g. `>=3.11`)
+* An `==` clause where the value is major.minor, (e.g. `==3.11`, but not `==3.11.2`)
+* An `==` clause where the value is major.* or major.minor.* (e.g. `3.*` or `==3.11.*`)
+* A half-open range, formed by a clause with ONE comma, where one expression is `<` and the other expression is `>=`.
+
+Items which cannot be trivially reduced to a half-open range are out of scope for a simplified Requires-Python. It's important to note that `Requires-Python: >=3.10,<3.7` is a Simplified Requires-Python half-open range. It should proceed through the rest of the simplified algorithm, at which it will reject for being a disjoint range, and `PythonRangeMismatchError` will be thrown
+
+## Simplified Requires-Python algorithm
+Once a specifier is confirmed to be a simplified specifier, perform the following algorithm:
+
+1. Generate the corresponding half-open range for the specifier
+    1. Convert bare inequality operators into a half-open range: `>=3.11` becomes `[3.11, None)`, `<3.4` becomes `[None, 3.4)`
+    2. Convert ~= into a bounded half-open range. For example: `~=3.11.2` becomes `[3.11.2, 3.12)` 
+    3. Convert a simple compound clause to the corresponding half-open range: `>=3.11,<3.14.2` becomes `[3.11, 3.14.2)` Note that these are PEP ranges, nothing to do with matchspec. Matchspec boundary checking (e.g. <3.11.0a0) happens much later when transforming to conda
+    4. Treat `== major.minor` or `==major.minor.*` as `>=major.minor,<major.minor+1` and perform the simple compound clause transformation
+    6. Treat `==major.*` as `>= major`, and output `[major.0, None)`
+2. Generate the corresponding half-open range for the filename version
+    1. An exact minor gets converted into major/minor, major/minor+1: `3.13` becomes `[3.13, 3.14)`
+    2. A minor floor has None as the upper range: `3.13` (floor) becomes `[3.13, None)`
+3. Determine the combined lower floor by taking `max(python_requires[0], filename_requires[0])`  where None always loses
+4. Determine the combined upper floor by taking `min(python_requires[1], filename_requires[1])` where None always loses
+5. Determine if the combined range is disjoint, where lower >= upper. If so, raise `PythonRangeMismatchError` (lower == upper is still disjoint since the range is half-open)
+6. Use the combined range as necessary, for example converting back to a PEP specifier `>=3.11,<3.13` or `>=3.11` as appropriate
+
+Note that future downstream parts of the codebase may need to know whether a range is restricted to a particular minor version. The combined-range is appropriate for those decisions when it exists. It is up to other callers to decide what to do when the computed python version did not go through the simplifying algorithm.
 
 ## pip behavior
 Pip first needs to decide whether to download a wheel, and then afterwards to decide if a wheel in its cache is worth digging further into.

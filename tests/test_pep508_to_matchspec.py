@@ -143,7 +143,7 @@ class TestOperators:
     def test_multiple_specifiers_are_joined_in_canonical_order(self) -> None:
         assert (
             pep508_to_matchspec("requests<=2.0.0,!=1.0.1,>=0.9", (aggregator_mapper,))
-            == "requests !=1.0.1,<=2.0.0,>=0.9"
+            == "requests >=0.9,<=2.0.0,!=1.0.1"
         )
 
     def test_multiple_specifiers_with_the_same_operator_sort_lexicographically(self) -> None:
@@ -209,12 +209,13 @@ class TestOperators:
         )
 
     def test_compatible_release_combines_with_another_specifier_in_canonical_order(self) -> None:
-        """`!=` sorts before `~=` lexicographically, so it comes first even
-        though the `~=` expansion is the tighter, more informative bound.
+        """`~=`'s pin category sorts before `!=`'s exclusion category, so
+        the `~=` expansion's `>=`/`<` pair comes first even though `!=`
+        sorts earlier alphabetically.
         """
         assert (
             pep508_to_matchspec("requests~=3.13.2,!=3.13.5", (aggregator_mapper,))
-            == "requests !=3.13.5,>=3.13.2,<3.14.0a0"
+            == "requests >=3.13.2,<3.14.0a0,!=3.13.5"
         )
 
     def test_compatible_release_rejects_a_pre_release_by_default(self) -> None:
@@ -624,7 +625,7 @@ class TestMarkers:
         entry = 'numpy<1.25.0,>=1.24.0; python_full_version == "3.8.*"'
 
         assert pep508_to_matchspec(entry, (aggregator_mapper,)) == (
-            'numpy <1.25.0a0,>=1.24.0[when="python=3.8"]'
+            'numpy >=1.24.0,<1.25.0a0[when="python=3.8"]'
         )
 
     def test_extras_and_marker_combine_in_one_bracket(self) -> None:

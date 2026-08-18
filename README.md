@@ -97,7 +97,7 @@ Many of these reasons are unresolvable problems with the wheels themselves, and 
 | `UnsupportedPlatformError` | Wheel's platform tag is out of policy scope (e.g. musllinux, 32-bit Windows/Linux, iOS/Android, wasm, non-manylinux glibc, or an unsupported CPU arch) | 9.605% |
 | `InvalidInterpreterTagError` | Wheel filename has a malformed/unrecognized interpreter tag (e.g. PyPy `pp37`) | 2.228% |
 | `UnsupportedInterpreterError` | Wheel targets a non-CPython interpreter major (e.g. `py2`, no CPython tag at all) | 1.472% |
-| `PythonRangeMismatchError` | Wheel filename's implied CPython version range doesn't intersect the sdist's declared `Requires-Python` | 0.246% |
+| `PythonRangeMismatchError` | Wheel filename's implied CPython version range doesn't intersect the sdist's declared `Requires-Python` | 0.244% |
 | `InvalidPythonRequirementRangeError` | `Requires-Python` is not a contiguous Python 3.x minor-version range (e.g. `==2.7`) | 0.204% |
 | `InvalidRequirementError` | A `Requires-Dist` entry fails to parse as a PEP 508 requirement string | 0.059% |
 | `UnsupportedInterpreterVersionError` | Wheel targets CPython < 3.4 (below reroll's minimum supported version) | 0.044% |

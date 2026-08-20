@@ -28,6 +28,7 @@ from reroll.errors import ConfigLoadError, UnresolvedCondaNameError
 from reroll.name_mapping import (
     Candidate,
     CandidateSource,
+    Winner,
     aggregator_mapper,
     map_name,
     passthrough_mapper,
@@ -61,9 +62,9 @@ def _other_candidate(conda_name: str = "tzdata") -> Candidate:
     )
 
 
-def _only(result: str | Sequence[Candidate]) -> Candidate:
+def _only(result: Winner | Sequence[Candidate]) -> Candidate:
     """Narrow a mapper result down to the single `Candidate` it contributed."""
-    assert not isinstance(result, str)
+    assert not isinstance(result, Winner)
     (candidate,) = result
     return candidate
 
@@ -583,7 +584,7 @@ class TestCondaLockMapperEndToEnd:
         mapper = conda_lock_mapper(
             mapping_url=mapping, priority_url=priority, name_mapping_url=names
         )
-        assert map_name("annoy", (mapper, aggregator_mapper)) == "python-annoy"
+        assert map_name("annoy", (mapper, aggregator_mapper)).conda_name == "python-annoy"
 
     def test_ambiguous_hit_plus_aggregator_still_needs_a_deciding_mapper(
         self, local_tables: tuple[Path, Path, Path]
@@ -605,9 +606,9 @@ class TestCondaLockMapperEndToEnd:
         mapper = conda_lock_mapper(
             mapping_url=mapping, priority_url=priority, name_mapping_url=names
         )
-        assert map_name("No_Such.Pkg", (mapper, aggregator_mapper, passthrough_mapper)) == (
-            "no-such-pkg"
-        )
+        assert map_name(
+            "No_Such.Pkg", (mapper, aggregator_mapper, passthrough_mapper)
+        ).conda_name == ("no-such-pkg")
 
 
 # --------------------------------------------------------------------------

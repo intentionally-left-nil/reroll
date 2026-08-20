@@ -16,7 +16,10 @@ from reroll.name_mapping import (
     CandidateSource,
     NameMapper,
     NameMappers,
+    NameResolution,
+    Winner,
     aggregator_mapper,
+    is_passthrough,
     map_name,
     passthrough_mapper,
     static_mapper,
@@ -34,6 +37,8 @@ class TestCandidateSource:
             (CandidateSource.PARSELMOUTH, "parselmouth"),
             (CandidateSource.GRAYSKULL, "grayskull"),
             (CandidateSource.CONDA_LOCK, "conda-lock"),
+            (CandidateSource.PASSTHROUGH, "passthrough"),
+            (CandidateSource.CONSENSUS, "consensus"),
             (CandidateSource.OTHER, "other"),
         ],
     )
@@ -82,9 +87,8 @@ class TestCandidate:
             )
 
     def test_source_rejects_a_value_outside_the_fixed_set(self) -> None:
-        """`source` is restricted to `parselmouth`/`grayskull`/`conda-lock`/
-        `other` -- any other string is rejected, not silently accepted as a
-        fifth, ad-hoc source.
+        """`source` is restricted to the fixed `CandidateSource` set -- any
+        other string is rejected, not silently accepted as an ad-hoc source.
         """
         with pytest.raises(ValidationError):
             Candidate(
@@ -145,21 +149,163 @@ class TestCandidate:
 
 
 # --------------------------------------------------------------------------
+# `Winner`
+# --------------------------------------------------------------------------
+
+
+class TestWinner:
+    def test_construction(self) -> None:
+        winner = Winner(
+            conda_name="python-tzdata",
+            probability=0.9,
+            source=CandidateSource.PARSELMOUTH,
+            mapper="parselmouth_lookup",
+        )
+
+        assert winner.conda_name == "python-tzdata"
+        assert winner.probability == 0.9
+        assert winner.source is CandidateSource.PARSELMOUTH
+        assert winner.mapper == "parselmouth_lookup"
+
+    def test_is_a_candidate(self) -> None:
+        """A `Winner` is-a `Candidate`: the distinction between "one
+        mapper's opinion" and "the definitive answer" is which type the
+        mapper chain's driver received, not an extra field a `Sequence
+        [Candidate]` could accidentally carry on more than one element.
+        """
+        winner = Winner(
+            conda_name="tzdata", probability=0.5, source=CandidateSource.OTHER, mapper="test"
+        )
+
+        assert isinstance(winner, Candidate)
+
+    def test_frozen(self) -> None:
+        winner = Winner(
+            conda_name="tzdata", probability=0.5, source=CandidateSource.OTHER, mapper="test"
+        )
+
+        attr = "conda_name"
+        with pytest.raises(ValidationError):
+            setattr(winner, attr, "other")
+
+    def test_from_candidate_copies_every_field(self) -> None:
+        candidate = Candidate(
+            conda_name="tzdata",
+            probability=0.75,
+            source=CandidateSource.GRAYSKULL,
+            mapper="grayskull_config",
+        )
+
+        winner = Winner.from_candidate(candidate)
+
+        assert winner.conda_name == candidate.conda_name
+        assert winner.probability == candidate.probability
+        assert winner.source is candidate.source
+        assert winner.mapper == candidate.mapper
+
+    def test_from_candidate_returns_a_winner(self) -> None:
+        candidate = Candidate(
+            conda_name="tzdata", probability=0.5, source=CandidateSource.OTHER, mapper="test"
+        )
+
+        winner = Winner.from_candidate(candidate)
+
+        assert isinstance(winner, Winner)
+
+
+# --------------------------------------------------------------------------
+# `NameResolution`
+# --------------------------------------------------------------------------
+
+
+class TestNameResolution:
+    def test_construction(self) -> None:
+        winner = Winner(
+            conda_name="python-tzdata",
+            probability=1.0,
+            source=CandidateSource.GRAYSKULL,
+            mapper="grayskull_config",
+        )
+
+        resolution = NameResolution(pypi_name=canonicalize_name("tzdata"), winner=winner)
+
+        assert resolution.pypi_name == "tzdata"
+        assert resolution.winner is winner
+
+    def test_frozen(self) -> None:
+        winner = Winner(
+            conda_name="tzdata", probability=0.5, source=CandidateSource.OTHER, mapper="test"
+        )
+        resolution = NameResolution(pypi_name=canonicalize_name("tzdata"), winner=winner)
+
+        attr = "pypi_name"
+        with pytest.raises(ValidationError):
+            setattr(resolution, attr, canonicalize_name("other"))
+
+
+# --------------------------------------------------------------------------
+# `is_passthrough`
+# --------------------------------------------------------------------------
+
+
+class TestIsPassthrough:
+    def test_true_for_a_passthrough_source(self) -> None:
+        candidate = Candidate(
+            conda_name="tinylib",
+            probability=0.0,
+            source=CandidateSource.PASSTHROUGH,
+            mapper="passthrough_mapper",
+        )
+
+        assert is_passthrough(candidate) is True
+
+    @pytest.mark.parametrize(
+        "source",
+        [
+            CandidateSource.PARSELMOUTH,
+            CandidateSource.GRAYSKULL,
+            CandidateSource.CONDA_LOCK,
+            CandidateSource.CONSENSUS,
+            CandidateSource.OTHER,
+        ],
+    )
+    def test_false_for_every_other_source(self, source: CandidateSource) -> None:
+        candidate = Candidate(conda_name="tinylib", probability=0.5, source=source, mapper="test")
+
+        assert is_passthrough(candidate) is False
+
+    def test_accepts_a_winner_too(self) -> None:
+        """`Winner` is-a `Candidate`, so the same check applies to the
+        value `map_name` actually returns, not just a bare `Candidate`.
+        """
+        winner = passthrough_mapper(canonicalize_name("tinylib"), ())
+        assert isinstance(winner, Winner)
+
+        assert is_passthrough(winner) is True
+
+
+# --------------------------------------------------------------------------
 # Callable-shape acceptance for `NameMapper`
 # --------------------------------------------------------------------------
+
+
+def _winner(conda_name: str, mapper: str) -> Winner:
+    return Winner(
+        conda_name=conda_name, probability=1.0, source=CandidateSource.OTHER, mapper=mapper
+    )
 
 
 def _function_mapper(
     name: NormalizedName,
     candidates: Sequence[Candidate],
-) -> str | Sequence[Candidate]:
+) -> Winner | Sequence[Candidate]:
     del candidates
-    return f"conda-{name}"
+    return _winner(f"conda-{name}", mapper="function")
 
 
 class _StatefulMapper:
     """A stateful class instance with `__call__` that counts hits and is
-    reused across calls. Always resolves to a fixed `str` result.
+    reused across calls. Always resolves to a fixed `Winner` result.
     """
 
     def __init__(self, result: str) -> None:
@@ -170,10 +316,10 @@ class _StatefulMapper:
         self,
         name: NormalizedName,
         candidates: Sequence[Candidate],
-    ) -> str | Sequence[Candidate]:
+    ) -> Winner | Sequence[Candidate]:
         del name, candidates
         self.hits += 1
-        return self.result
+        return _winner(self.result, mapper="stateful")
 
 
 class _BoundMethodOwner:
@@ -181,48 +327,50 @@ class _BoundMethodOwner:
         self,
         name: NormalizedName,
         candidates: Sequence[Candidate],
-    ) -> str | Sequence[Candidate]:
+    ) -> Winner | Sequence[Candidate]:
         del candidates
-        return f"bound-{name}"
+        return _winner(f"bound-{name}", mapper="bound")
 
 
 class TestCallableShapes:
     def test_function(self) -> None:
-        assert map_name("Requests", (_function_mapper,)) == "conda-requests"
+        assert map_name("Requests", (_function_mapper,)).conda_name == "conda-requests"
 
     def test_lambda(self) -> None:
-        mapper: NameMapper = lambda name, candidates: f"lambda-{name}"  # noqa: E731
-        assert map_name("Requests", (mapper,)) == "lambda-requests"
+        mapper: NameMapper = lambda name, candidates: _winner(  # noqa: E731
+            f"lambda-{name}", mapper="lambda"
+        )
+        assert map_name("Requests", (mapper,)).conda_name == "lambda-requests"
 
     def test_closure(self) -> None:
         def make_mapper(prefix: str) -> NameMapper:
             def _mapper(
                 name: NormalizedName,
                 candidates: Sequence[Candidate],
-            ) -> str | Sequence[Candidate]:
+            ) -> Winner | Sequence[Candidate]:
                 del candidates
-                return f"{prefix}-{name}"
+                return _winner(f"{prefix}-{name}", mapper="closure")
 
             return _mapper
 
         mapper = make_mapper("closure")
-        assert map_name("Requests", (mapper,)) == "closure-requests"
+        assert map_name("Requests", (mapper,)).conda_name == "closure-requests"
 
     def test_functools_partial(self) -> None:
         def _mapper(
             prefix: str,
             name: NormalizedName,
             candidates: Sequence[Candidate],
-        ) -> str | Sequence[Candidate]:
+        ) -> Winner | Sequence[Candidate]:
             del candidates
-            return f"{prefix}-{name}"
+            return _winner(f"{prefix}-{name}", mapper="partial")
 
         mapper = functools.partial(_mapper, "partial")
-        assert map_name("Requests", (mapper,)) == "partial-requests"
+        assert map_name("Requests", (mapper,)).conda_name == "partial-requests"
 
     def test_bound_method(self) -> None:
         owner = _BoundMethodOwner()
-        assert map_name("Requests", (owner.lookup,)) == "bound-requests"
+        assert map_name("Requests", (owner.lookup,)).conda_name == "bound-requests"
 
     def test_stateful_instance_counts_hits_and_is_reused(self) -> None:
         mapper = _StatefulMapper("stateful-result")
@@ -230,20 +378,20 @@ class TestCallableShapes:
         first = map_name("Requests", (mapper,))
         second = map_name("Other", (mapper,))
 
-        assert first == "stateful-result"
-        assert second == "stateful-result"
+        assert first.conda_name == "stateful-result"
+        assert second.conda_name == "stateful-result"
         assert mapper.hits == 2
 
 
 def _different_parameter_names(
     pypi_name: str, seen: Sequence[Candidate]
-) -> str | Sequence[Candidate]:
+) -> Winner | Sequence[Candidate]:
     """Used only for the static typecheck assertion below: a `NameMapper`
     annotates its parameters positionally, so an implementation naming them
     anything else must still satisfy the alias.
     """
     del pypi_name, seen
-    return "tinylib"
+    return _winner("tinylib", mapper="different-parameter-names")
 
 
 _typecheck_assignment: NameMapper = _different_parameter_names
@@ -251,7 +399,7 @@ _typecheck_assignment: NameMapper = _different_parameter_names
 
 class TestArbitraryParameterNames:
     def test_still_callable_as_a_mapper(self) -> None:
-        assert map_name("tinylib", (_different_parameter_names,)) == "tinylib"
+        assert map_name("tinylib", (_different_parameter_names,)).conda_name == "tinylib"
 
 
 # --------------------------------------------------------------------------
@@ -260,9 +408,9 @@ class TestArbitraryParameterNames:
 
 
 class _Spy:
-    """Records what it was called with. Returns `result` if given,
-    otherwise passes `candidates` through unchanged (the "no opinion"
-    behavior every mapper must support).
+    """Records what it was called with. Returns a `Winner` wrapping `result`
+    if given, otherwise passes `candidates` through unchanged (the "no
+    opinion" behavior every mapper must support).
     """
 
     def __init__(self, result: str | None = None) -> None:
@@ -273,9 +421,11 @@ class _Spy:
         self,
         name: NormalizedName,
         candidates: Sequence[Candidate],
-    ) -> str | Sequence[Candidate]:
+    ) -> Winner | Sequence[Candidate]:
         self.calls.append((name, candidates))
-        return candidates if self.result is None else self.result
+        if self.result is None:
+            return candidates
+        return _winner(self.result, mapper="spy")
 
 
 def _candidate(
@@ -294,17 +444,17 @@ class TestChainResolution:
 
         result = map_name("tinylib", (first, second))
 
-        assert result == "second-result"
+        assert result.conda_name == "second-result"
         assert len(first.calls) == 1
         assert len(second.calls) == 1
 
-    def test_first_str_wins_and_later_mappers_are_not_called(self) -> None:
+    def test_first_winner_wins_and_later_mappers_are_not_called(self) -> None:
         first = _Spy(result="first-result")
         second = _Spy(result="second-result")
 
         result = map_name("tinylib", (first, second))
 
-        assert result == "first-result"
+        assert result.conda_name == "first-result"
         assert len(first.calls) == 1
         assert len(second.calls) == 0
 
@@ -445,7 +595,7 @@ class TestExceptionPropagation:
         def _buggy(
             name: NormalizedName,
             candidates: Sequence[Candidate],
-        ) -> str | Sequence[Candidate]:
+        ) -> Winner | Sequence[Candidate]:
             del name, candidates
             raise KeyError("boom")
 
@@ -456,7 +606,7 @@ class TestExceptionPropagation:
         def _buggy(
             name: NormalizedName,
             candidates: Sequence[Candidate],
-        ) -> str | Sequence[Candidate]:
+        ) -> Winner | Sequence[Candidate]:
             del name, candidates
             raise KeyError("boom")
 
@@ -477,7 +627,32 @@ class TestStaticMapper:
     def test_hit(self) -> None:
         mapper = static_mapper({"tzdata": "python-tzdata"})
 
-        assert mapper(canonicalize_name("tzdata"), ()) == "python-tzdata"
+        result = mapper(canonicalize_name("tzdata"), ())
+
+        assert isinstance(result, Winner)
+        assert result.conda_name == "python-tzdata"
+
+    def test_hit_has_certain_provenance_attributed_to_static_mapper_by_default(self) -> None:
+        mapper = static_mapper({"tzdata": "python-tzdata"})
+
+        result = mapper(canonicalize_name("tzdata"), ())
+
+        assert isinstance(result, Winner)
+        assert result.probability == 1.0
+        assert result.source is CandidateSource.OTHER
+        assert result.mapper == "static_mapper"
+
+    def test_mapper_name_can_be_overridden(self) -> None:
+        """`overrides_mapper` (`reroll.overrides_mapper`) is built from
+        `static_mapper` but needs its own name in a `Winner`'s provenance,
+        distinct from any other static-table mapper.
+        """
+        mapper = static_mapper({"tzdata": "python-tzdata"}, mapper_name="overrides_mapper")
+
+        result = mapper(canonicalize_name("tzdata"), ())
+
+        assert isinstance(result, Winner)
+        assert result.mapper == "overrides_mapper"
 
     def test_miss_returns_the_input_candidates_object_unchanged(self) -> None:
         mapper = static_mapper({"tzdata": "python-tzdata"})
@@ -490,7 +665,10 @@ class TestStaticMapper:
     def test_non_canonical_keys_are_normalized_at_construction(self) -> None:
         mapper = static_mapper({"Zope-Interface": "zope.interface"})
 
-        assert mapper(canonicalize_name("zope-interface"), ()) == "zope.interface"
+        result = mapper(canonicalize_name("zope-interface"), ())
+
+        assert isinstance(result, Winner)
+        assert result.conda_name == "zope.interface"
 
     def test_value_is_not_validated_against_cep_26(self) -> None:
         """Mirrors `Candidate.conda_name`: validation is deferred entirely
@@ -499,12 +677,15 @@ class TestStaticMapper:
         """
         mapper = static_mapper({"tzdata": "Bad--Name"})
 
-        assert mapper(canonicalize_name("tzdata"), ()) == "Bad--Name"
+        result = mapper(canonicalize_name("tzdata"), ())
+
+        assert isinstance(result, Winner)
+        assert result.conda_name == "Bad--Name"
 
     def test_used_end_to_end_through_map_name_on_a_hit(self) -> None:
         mapper = static_mapper({"tzdata": "python-tzdata"})
 
-        assert map_name("tzdata", (mapper,)) == "python-tzdata"
+        assert map_name("tzdata", (mapper,)).conda_name == "python-tzdata"
 
     def test_used_end_to_end_through_map_name_raises_on_a_miss(self) -> None:
         mapper = static_mapper({"tzdata": "python-tzdata"})
@@ -561,9 +742,27 @@ class TestAggregatorMapper:
     # A grayskull candidate is authoritative.
 
     def test_grayskull_candidate_alone_is_taken(self) -> None:
-        result = aggregator_mapper(canonicalize_name("annoy"), (_grayskull_candidate(),))
+        candidate = _grayskull_candidate()
 
-        assert result == "python-annoy"
+        result = aggregator_mapper(canonicalize_name("annoy"), (candidate,))
+
+        assert isinstance(result, Winner)
+        assert result.conda_name == "python-annoy"
+
+    def test_grayskull_candidate_provenance_is_preserved_verbatim(self) -> None:
+        """A `Winner` promoted from an existing `Candidate` carries that
+        candidate's own `probability`/`source`/`mapper` through unchanged
+        -- `aggregator_mapper` never fabricates provenance for a candidate
+        it did not itself originate.
+        """
+        candidate = _grayskull_candidate()
+
+        result = aggregator_mapper(canonicalize_name("annoy"), (candidate,))
+
+        assert isinstance(result, Winner)
+        assert result.probability == candidate.probability
+        assert result.source is candidate.source
+        assert result.mapper == candidate.mapper
 
     def test_grayskull_beats_parselmouth(self) -> None:
         candidates = (
@@ -573,7 +772,8 @@ class TestAggregatorMapper:
 
         result = aggregator_mapper(canonicalize_name("annoy"), candidates)
 
-        assert result == "python-annoy"
+        assert isinstance(result, Winner)
+        assert result.conda_name == "python-annoy"
 
     def test_grayskull_beats_a_certain_conda_lock_candidate(self) -> None:
         candidates = (
@@ -583,7 +783,8 @@ class TestAggregatorMapper:
 
         result = aggregator_mapper(canonicalize_name("annoy"), candidates)
 
-        assert result == "python-annoy"
+        assert isinstance(result, Winner)
+        assert result.conda_name == "python-annoy"
 
     # A certain (probability 1.0) conda-lock candidate is a static override.
 
@@ -592,7 +793,8 @@ class TestAggregatorMapper:
 
         result = aggregator_mapper(canonicalize_name("tzdata"), candidates)
 
-        assert result == "python-tzdata"
+        assert isinstance(result, Winner)
+        assert result.conda_name == "python-tzdata"
 
     def test_certain_conda_lock_candidate_beats_parselmouth(self) -> None:
         candidates = (
@@ -602,7 +804,8 @@ class TestAggregatorMapper:
 
         result = aggregator_mapper(canonicalize_name("tzdata"), candidates)
 
-        assert result == "python-tzdata"
+        assert isinstance(result, Winner)
+        assert result.conda_name == "python-tzdata"
 
     # A name proposed by two or more distinct mappers wins the vote.
 
@@ -614,7 +817,26 @@ class TestAggregatorMapper:
 
         result = aggregator_mapper(canonicalize_name("tinylib"), candidates)
 
-        assert result == "x"
+        assert isinstance(result, Winner)
+        assert result.conda_name == "x"
+
+    def test_vote_winner_is_attributed_to_the_aggregator_with_consensus_source(self) -> None:
+        """A vote winner is a fact the aggregator itself synthesizes --
+        "at least two mappers agree" -- not something any single
+        contributed `Candidate` already stated, so its `Winner` is
+        attributed to `aggregator_mapper` with `CandidateSource.CONSENSUS`,
+        not to whichever candidate happened to be first.
+        """
+        candidates = (
+            _conda_lock_candidate("x", 0.6),
+            _parselmouth_candidate("x", 0.5),
+        )
+
+        result = aggregator_mapper(canonicalize_name("tinylib"), candidates)
+
+        assert isinstance(result, Winner)
+        assert result.source is CandidateSource.CONSENSUS
+        assert result.mapper == "aggregator_mapper"
 
     def test_votes_count_every_candidate_not_just_each_mappers_top_pick(self) -> None:
         candidates = (
@@ -625,7 +847,8 @@ class TestAggregatorMapper:
 
         result = aggregator_mapper(canonicalize_name("tinylib"), candidates)
 
-        assert result == "x"
+        assert isinstance(result, Winner)
+        assert result.conda_name == "x"
 
     def test_one_mapper_voting_twice_for_a_name_is_still_one_vote(self) -> None:
         candidates = (
@@ -648,7 +871,8 @@ class TestAggregatorMapper:
 
         result = aggregator_mapper(canonicalize_name("tinylib"), candidates)
 
-        assert result == "beta"
+        assert isinstance(result, Winner)
+        assert result.conda_name == "beta"
 
     def test_vote_tie_then_breaks_on_summed_probability(self) -> None:
         candidates = (
@@ -660,7 +884,8 @@ class TestAggregatorMapper:
 
         result = aggregator_mapper(canonicalize_name("tinylib"), candidates)
 
-        assert result == "beta"
+        assert isinstance(result, Winner)
+        assert result.conda_name == "beta"
 
     def test_a_full_vote_tie_breaks_on_the_lexicographically_smallest_name(self) -> None:
         candidates = (
@@ -672,7 +897,8 @@ class TestAggregatorMapper:
 
         result = aggregator_mapper(canonicalize_name("tinylib"), candidates)
 
-        assert result == "alpha"
+        assert isinstance(result, Winner)
+        assert result.conda_name == "alpha"
 
     def test_disagreeing_mappers_with_no_consensus_defer(self) -> None:
         candidates = (
@@ -691,7 +917,8 @@ class TestAggregatorMapper:
 
         result = aggregator_mapper(canonicalize_name("annoy"), candidates)
 
-        assert result == "python-annoy"
+        assert isinstance(result, Winner)
+        assert result.conda_name == "python-annoy"
 
     def test_single_non_parselmouth_mapper_below_the_confidence_threshold_defers(self) -> None:
         candidates = (_conda_lock_candidate("levenshtein", 0.6),)
@@ -705,7 +932,8 @@ class TestAggregatorMapper:
 
         result = aggregator_mapper(canonicalize_name("opencv"), candidates)
 
-        assert result == "opencv"
+        assert isinstance(result, Winner)
+        assert result.conda_name == "opencv"
 
     def test_parselmouth_with_multiple_candidates_below_the_confidence_threshold_defers(
         self,
@@ -744,7 +972,8 @@ class TestAggregatorMapper:
 
         result = aggregator_mapper(canonicalize_name("fastapi"), candidates)
 
-        assert result == "fastapi"
+        assert isinstance(result, Winner)
+        assert result.conda_name == "fastapi"
 
     def test_single_mapper_parselmouth_multiple_candidates_low_probability_noise_resolves_to_winner(
         self,
@@ -763,7 +992,8 @@ class TestAggregatorMapper:
 
         result = aggregator_mapper(canonicalize_name("pillow"), candidates)
 
-        assert result == "pillow"
+        assert isinstance(result, Winner)
+        assert result.conda_name == "pillow"
 
     def test_single_mapper_parselmouth_multiple_candidates_below_confidence_threshold_defers(
         self,
@@ -803,7 +1033,7 @@ class TestAggregatorMapper:
 
         result = map_name("fastapi", (_contributor, aggregator_mapper))
 
-        assert result == "fastapi"
+        assert result.conda_name == "fastapi"
 
     # End to end through `map_name`.
 
@@ -819,7 +1049,7 @@ class TestAggregatorMapper:
 
         result = map_name("annoy", (_contributor, aggregator_mapper))
 
-        assert result == "python-annoy"
+        assert result.conda_name == "python-annoy"
 
     def test_used_end_to_end_raises_when_the_aggregator_defers(self) -> None:
         contributed = (
@@ -849,7 +1079,15 @@ class TestPassthroughMapper:
     def test_empty_candidates_resolves_to_the_normalized_name(self) -> None:
         result = passthrough_mapper(canonicalize_name("tinylib"), ())
 
-        assert result == "tinylib"
+        assert isinstance(result, Winner)
+        assert result.conda_name == "tinylib"
+
+    def test_empty_candidates_is_attributed_to_the_passthrough_source(self) -> None:
+        result = passthrough_mapper(canonicalize_name("tinylib"), ())
+
+        assert isinstance(result, Winner)
+        assert result.source is CandidateSource.PASSTHROUGH
+        assert result.mapper == "passthrough_mapper"
 
     def test_fallback_does_not_enforce_the_64_character_limit(self) -> None:
         """The normalized-name fallback is deferred entirely to whatever
@@ -862,8 +1100,9 @@ class TestPassthroughMapper:
 
         result = passthrough_mapper(long_name, ())
 
-        assert result == long_name
-        assert len(result) > 64
+        assert isinstance(result, Winner)
+        assert result.conda_name == long_name
+        assert len(result.conda_name) > 64
 
     def test_non_empty_candidates_defer(self) -> None:
         """A name with candidates nobody committed to is ambiguous, not
@@ -879,24 +1118,24 @@ class TestPassthroughMapper:
     # End to end through `map_name`.
 
     def test_used_end_to_end_alone_resolves_to_the_normalized_name(self) -> None:
-        assert map_name("Zope_Interface", (passthrough_mapper,)) == "zope-interface"
+        assert map_name("Zope_Interface", (passthrough_mapper,)).conda_name == "zope-interface"
 
     def test_used_end_to_end_the_64_character_limit_is_not_enforced_by_map_name(self) -> None:
-        """`map_name` returns whatever string a mapper (here,
+        """`map_name` returns whatever `Winner` a mapper (here,
         `passthrough_mapper`'s fallback) resolves to, uninspected -- CEP 26
         length/shape validation is a downstream concern, not part of the
         chain-resolution contract.
         """
         result = map_name("a" * 65, (passthrough_mapper,))
 
-        assert result == "a" * 65
+        assert result.conda_name == "a" * 65
 
     def test_used_end_to_end_after_a_no_opinion_mapper(self) -> None:
         no_opinion = _Spy(result=None)
 
         result = map_name("tinylib", (no_opinion, passthrough_mapper))
 
-        assert result == "tinylib"
+        assert result.conda_name == "tinylib"
 
     def test_used_end_to_end_after_the_aggregator_defers(self) -> None:
         """The intended composition (`default_mappers`): `aggregator_mapper`
@@ -905,7 +1144,7 @@ class TestPassthroughMapper:
         """
         result = map_name("Zope_Interface", (aggregator_mapper, passthrough_mapper))
 
-        assert result == "zope-interface"
+        assert result.conda_name == "zope-interface"
 
     def test_used_end_to_end_does_not_mask_aggregator_ambiguity(self) -> None:
         """Candidates the aggregator finds ambiguous stay ambiguous --

@@ -15,7 +15,7 @@ from rattler.exceptions import InvalidMatchSpecError
 from reroll.dependencies.marker_conversion import UnconvertableMarkerError, marker_condition
 from reroll.dependencies.matchspec_specifier import specifier_to_matchspec
 from reroll.errors import InvalidRequirementError, UnconvertableRequirementError
-from reroll.name_mapping import NameMappers, map_name
+from reroll.name_mapping import NameMappers, NameResolution, map_name
 
 _MAX_EXTRA_LENGTH = 64
 """CEP-29's `extras` bracket key limits each extra name to 64 characters."""
@@ -27,9 +27,10 @@ def pep508_to_matchspec(
     *,
     allow_pre: bool = False,
     abi3_upper_bound: str | None = None,
-) -> str:
-    """The conda MatchSpec for `entry`, a single PEP 508 requirement string
-    (a `Requires-Dist` entry).
+) -> tuple[str, NameResolution]:
+    """`entry`'s (a single PEP 508 requirement string, a `Requires-Dist`
+    entry) conda MatchSpec, paired with the `NameResolution` its own PyPI
+    name resolved through.
 
     `abi3_upper_bound` bounds `marker_condition`'s `python_version in
     "<literal>"` rewrite the same way it bounds `explode_abi3`'s tag
@@ -69,7 +70,9 @@ def pep508_to_matchspec(
         raise UnconvertableRequirementError(
             f"cannot convert {entry!r}: it has a direct URL reference"
         )
-    conda_name = map_name(requirement.name, mappers)
+    winner = map_name(requirement.name, mappers)
+    name_resolution = NameResolution(pypi_name=canonicalize_name(requirement.name), winner=winner)
+    conda_name = winner.conda_name
     version_clause = _specifier_to_matchspec(requirement.specifier, entry, allow_pre=allow_pre)
     extras = {canonicalize_name(extra) for extra in requirement.extras}
     if extras:
@@ -92,7 +95,7 @@ def pep508_to_matchspec(
         raise UnconvertableRequirementError(
             f"{matchspec!r}, converted from {entry!r}, is not a valid matchspec"
         ) from exc
-    return matchspec
+    return matchspec, name_resolution
 
 
 def _specifier_to_matchspec(specifiers: SpecifierSet, entry: str, *, allow_pre: bool) -> str:

@@ -202,7 +202,7 @@ class TestGrayskullMapperEndToEnd:
 
         result = map_name("annoy", (mapper, aggregator_mapper))
 
-        assert result == "python-annoy"
+        assert result.conda_name == "python-annoy"
 
     def test_miss_followed_by_aggregator_falls_back_to_the_normalized_name(
         self, fixture_config: Path
@@ -211,7 +211,7 @@ class TestGrayskullMapperEndToEnd:
 
         result = map_name("requests", (mapper, aggregator_mapper, passthrough_mapper))
 
-        assert result == "requests"
+        assert result.conda_name == "requests"
 
 
 # --------------------------------------------------------------------------

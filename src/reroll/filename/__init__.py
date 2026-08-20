@@ -17,7 +17,7 @@ from reroll.filename.enums import AbiKind, Arch, PlatformFamily
 from reroll.filename.platform import supported_archs
 from reroll.filename.python_requirement import PythonRequirement
 from reroll.filename.wheel_config import WheelConfig
-from reroll.name_mapping import NameMappers, map_name
+from reroll.name_mapping import NameMappers, NameResolution, map_name
 
 __all__ = [
     "AbiKind",
@@ -77,7 +77,8 @@ def parse_filename(
 
     # The name is tag-invariant, so this is resolved once,
     # before the tag loop below -- not once per `(tag, arch)` combination.
-    conda_name = map_name(name, mappers)
+    winner = map_name(name, mappers)
+    name_resolution = NameResolution(pypi_name=name, winner=winner)
 
     configs: list[WheelConfig] = []
     errors: list[RerollError] = []
@@ -93,13 +94,14 @@ def parse_filename(
                 configs.append(
                     WheelConfig(
                         normalized_pypi_name=name,
-                        conda_name=conda_name,
+                        conda_name=winner.conda_name,
                         version=version,
                         build=build,
                         interpreter=tag.interpreter,
                         abi=tag.abi,
                         platform=tag.platform,
                         arch=arch,
+                        name_resolution=name_resolution,
                     )
                 )
             except RerollError as exc:

@@ -8,7 +8,7 @@ from reroll.dependencies.version_format import format_version
 from reroll.errors import MetadataFilenameMismatchError
 from reroll.filename import WheelConfig, parse_filename
 from reroll.license import convert_license
-from reroll.name_mapping import NameMappers
+from reroll.name_mapping import NameMappers, NameResolution
 from reroll.wheel_metadata import WheelMetadata
 
 __all__ = ["WheelRecord", "get_wheel_records"]
@@ -38,6 +38,19 @@ class WheelRecord(WheelDependencies):
     sha256: str | None = None
     size: int | None = None
     url: str | None = None
+
+    @property
+    def resolutions(self) -> tuple[NameResolution, ...]:
+        """One `NameResolution` per unique PyPI name this record's own
+        name and dependencies resolved through -- deduped, since the same
+        name can appear in both `depends` and multiple `extra_depends`
+        groups. A caller wanting only converted or only unconverted
+        (`reroll.name_mapping.is_passthrough`) names filters this itself.
+        """
+        seen: dict[str, NameResolution] = {}
+        for resolution in self.name_resolutions:
+            seen.setdefault(resolution.pypi_name, resolution)
+        return tuple(seen[name] for name in sorted(seen))
 
 
 def get_wheel_records(
@@ -104,6 +117,7 @@ def get_wheel_records(
                     license=license_expression,
                     depends=dependencies.depends,
                     extra_depends=dependencies.extra_depends,
+                    name_resolutions=(config.name_resolution, *dependencies.name_resolutions),
                     fn=filename,
                     sha256=sha256,
                     size=size,

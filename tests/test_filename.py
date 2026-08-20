@@ -40,7 +40,10 @@ from reroll.filename.abi3 import explode_abi3
 from reroll.filename.python_requirement import minor_range
 from reroll.name_mapping import (
     Candidate,
+    CandidateSource,
     NameMappers,
+    NameResolution,
+    Winner,
     aggregator_mapper,
     passthrough_mapper,
 )
@@ -69,6 +72,15 @@ def _config(
         abi=abi,
         platform=platform,
         arch=arch,
+        name_resolution=NameResolution(
+            pypi_name=normalized_pypi_name,
+            winner=Winner(
+                conda_name=conda_name,
+                probability=0.0,
+                source=CandidateSource.PASSTHROUGH,
+                mapper="passthrough_mapper",
+            ),
+        ),
     )
 
 
@@ -1413,9 +1425,14 @@ class TestParseFilenameNameMapping:
     def test_mapper_result_reaches_conda_name(self) -> None:
         def _mapper(
             name: NormalizedName, candidates: Sequence[Candidate]
-        ) -> str | Sequence[Candidate]:
+        ) -> Winner | Sequence[Candidate]:
             del name, candidates
-            return "python-tinylib"
+            return Winner(
+                conda_name="python-tinylib",
+                probability=1.0,
+                source=CandidateSource.OTHER,
+                mapper="test",
+            )
 
         (config,) = parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(_mapper,))
 
@@ -1427,7 +1444,7 @@ class TestParseFilenameNameMapping:
 
         def _mapper(
             name: NormalizedName, candidates: Sequence[Candidate]
-        ) -> str | Sequence[Candidate]:
+        ) -> Winner | Sequence[Candidate]:
             del name
             nonlocal calls
             calls += 1
@@ -1444,9 +1461,14 @@ class TestParseFilenameNameMapping:
     def test_both_new_fields_are_identical_across_multi_config_filenames(self) -> None:
         def _mapper(
             name: NormalizedName, candidates: Sequence[Candidate]
-        ) -> str | Sequence[Candidate]:
+        ) -> Winner | Sequence[Candidate]:
             del name, candidates
-            return "python-tinylib"
+            return Winner(
+                conda_name="python-tinylib",
+                probability=1.0,
+                source=CandidateSource.OTHER,
+                mapper="test",
+            )
 
         configs = parse_filename(
             "tinylib-1.2.3-cp313-cp313-macosx_10_9_universal2.whl", mappers=(_mapper,)
@@ -1459,7 +1481,7 @@ class TestParseFilenameNameMapping:
     def test_unresolved_candidates_raises(self) -> None:
         def _no_opinion(
             name: NormalizedName, candidates: Sequence[Candidate]
-        ) -> str | Sequence[Candidate]:
+        ) -> Winner | Sequence[Candidate]:
             del name
             return candidates
 
@@ -1469,7 +1491,7 @@ class TestParseFilenameNameMapping:
     def test_unresolved_candidates_logs_at_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         def _no_opinion(
             name: NormalizedName, candidates: Sequence[Candidate]
-        ) -> str | Sequence[Candidate]:
+        ) -> Winner | Sequence[Candidate]:
             del name
             return candidates
 
@@ -1485,9 +1507,11 @@ class TestParseFilenameNameMapping:
     def test_overlong_conda_name_raises(self) -> None:
         def _mapper(
             name: NormalizedName, candidates: Sequence[Candidate]
-        ) -> str | Sequence[Candidate]:
+        ) -> Winner | Sequence[Candidate]:
             del name, candidates
-            return "a" * 65
+            return Winner(
+                conda_name="a" * 65, probability=1.0, source=CandidateSource.OTHER, mapper="test"
+            )
 
         with pytest.raises(InvalidCondaNameError):
             parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(_mapper,))
@@ -1495,9 +1519,11 @@ class TestParseFilenameNameMapping:
     def test_overlong_conda_name_logs_at_debug(self, caplog: pytest.LogCaptureFixture) -> None:
         def _mapper(
             name: NormalizedName, candidates: Sequence[Candidate]
-        ) -> str | Sequence[Candidate]:
+        ) -> Winner | Sequence[Candidate]:
             del name, candidates
-            return "a" * 65
+            return Winner(
+                conda_name="a" * 65, probability=1.0, source=CandidateSource.OTHER, mapper="test"
+            )
 
         with (
             caplog.at_level(logging.DEBUG, logger="reroll.filename"),

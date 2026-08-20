@@ -17,7 +17,7 @@ import pytest
 from packaging.utils import canonicalize_name
 
 from reroll.errors import CacheWriteError, DatabaseError, NetworkFetchError
-from reroll.name_mapping import Candidate, CandidateSource, aggregator_mapper, map_name
+from reroll.name_mapping import Candidate, CandidateSource, Winner, aggregator_mapper, map_name
 from reroll.parselmouth_mapper import (
     BASE_PROBABILITY,
     DEFAULT_CHANNEL,
@@ -923,7 +923,7 @@ class TestParselmouthMapperHit:
     ) -> None:
         mapper = _mapper_from_connection(built_connection)
         result = mapper(canonicalize_name("tzdata"), ())
-        assert not isinstance(result, str)
+        assert not isinstance(result, Winner)
         assert {c.conda_name for c in result} == {"python-tzdata", "psycopg"}
 
     def test_every_candidate_is_attributed_to_parselmouth(
@@ -931,13 +931,13 @@ class TestParselmouthMapperHit:
     ) -> None:
         mapper = _mapper_from_connection(built_connection)
         result = mapper(canonicalize_name("tzdata"), ())
-        assert not isinstance(result, str)
+        assert not isinstance(result, Winner)
         assert all(c.source is CandidateSource.PARSELMOUTH for c in result)
 
     def test_hit_never_ends_the_chain(self, built_connection: sqlite3.Connection) -> None:
         mapper = _mapper_from_connection(built_connection)
         result = mapper(canonicalize_name("tzdata"), ())
-        assert not isinstance(result, str)
+        assert not isinstance(result, Winner)
 
     def test_hit_appends_after_earlier_candidates(
         self, built_connection: sqlite3.Connection
@@ -950,7 +950,7 @@ class TestParselmouthMapperHit:
             mapper="test",
         )
         result = mapper(canonicalize_name("tzdata"), (earlier,))
-        assert not isinstance(result, str)
+        assert not isinstance(result, Winner)
         assert result[0] == earlier
 
     def test_self_mapping_scores_higher_than_the_vendored_one(
@@ -958,7 +958,7 @@ class TestParselmouthMapperHit:
     ) -> None:
         mapper = _mapper_from_connection(built_connection)
         result = mapper(canonicalize_name("tzdata"), ())
-        assert not isinstance(result, str)
+        assert not isinstance(result, Winner)
         by_name = {c.conda_name: c.probability for c in result}
         assert by_name["python-tzdata"] > by_name["psycopg"]
 
@@ -1233,7 +1233,7 @@ class TestOpenParselmouthDatabase:
         try:
             mapper = _mapper_from_connection(connection)
             result = mapper(canonicalize_name("requests"), ())
-            assert not isinstance(result, str)
+            assert not isinstance(result, Winner)
             assert result[0].conda_name == "requests"
         finally:
             connection.close()
@@ -1254,7 +1254,7 @@ class TestOpenParselmouthDatabase:
             assert db_path.stat().st_mtime_ns == built_at
             mapper = _mapper_from_connection(connection)
             result = mapper(canonicalize_name("requests"), ())
-            assert not isinstance(result, str)
+            assert not isinstance(result, Winner)
             assert result[0].conda_name == "requests"
         finally:
             connection.close()
@@ -1295,7 +1295,7 @@ class TestOpenParselmouthDatabase:
         try:
             old_mapper = _mapper_from_connection(old_connection)
             old_result = old_mapper(canonicalize_name("requests"), ())
-            assert not isinstance(old_result, str)
+            assert not isinstance(old_result, Winner)
             assert old_result[0].conda_name == "requests"
         finally:
             old_connection.close()
@@ -1320,7 +1320,7 @@ class TestOpenParselmouthDatabase:
         try:
             mapper = _mapper_from_connection(connection)
             result = mapper(canonicalize_name("requests"), ())
-            assert not isinstance(result, str)
+            assert not isinstance(result, Winner)
             assert result[0].conda_name == "requests"
         finally:
             connection.close()
@@ -1395,7 +1395,7 @@ class TestDefaultParselmouthMapper:
         result = mapper(canonicalize_name("requests"), ())
 
         assert (tmp_path / ".cache" / "reroll" / "parselmouth.sqlite3").exists()
-        assert not isinstance(result, str)
+        assert not isinstance(result, Winner)
         assert result[0].conda_name == "requests"
 
         # `parselmouth_mapper` deliberately never exposes its connection for
@@ -1489,7 +1489,7 @@ class TestAggregatorMapperAgainstRealData:
 
         result = map_name("fastapi", (mapper, aggregator_mapper))
 
-        assert result == "fastapi"
+        assert result.conda_name == "fastapi"
 
     @pytest.mark.network
     def test_pillow_resolves_end_to_end_with_low_probability_noise(
@@ -1503,4 +1503,4 @@ class TestAggregatorMapperAgainstRealData:
 
         result = map_name("pillow", (mapper, aggregator_mapper))
 
-        assert result == "pillow"
+        assert result.conda_name == "pillow"

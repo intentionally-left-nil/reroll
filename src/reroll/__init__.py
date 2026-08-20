@@ -26,7 +26,10 @@ from reroll.name_mapping import (
     CandidateSource,
     NameMapper,
     NameMappers,
+    NameResolution,
+    Winner,
     aggregator_mapper,
+    is_passthrough,
     map_name,
     passthrough_mapper,
     static_mapper,
@@ -40,6 +43,7 @@ __all__ = [
     "CandidateSource",
     "NameMapper",
     "NameMappers",
+    "NameResolution",
     "RerollError",
     "RerollInvalidWheelError",
     "RerollRuntimeError",
@@ -48,9 +52,11 @@ __all__ = [
     "UnresolvedCondaNameError",
     "WheelMetadata",
     "WheelRecord",
+    "Winner",
     "__version__",
     "aggregator_mapper",
     "default_mappers",
+    "is_passthrough",
     "map_name",
     "passthrough_mapper",
     "to_matchspec",
@@ -115,6 +121,7 @@ def to_matchspec(
     has such a clause.
     """
     mappers = mappers or default_mappers()
-    return pep508_to_matchspec(
+    matchspec, _resolution = pep508_to_matchspec(
         entry, mappers, allow_pre=allow_pre, abi3_upper_bound=abi3_upper_bound
     )
+    return matchspec

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 import pytest
+from packaging.utils import canonicalize_name
 
 from reroll.dependencies import WheelDependencies
 from reroll.errors import (
@@ -12,7 +13,13 @@ from reroll.errors import (
     UnconvertableRequirementError,
     UnsupportedPrereleaseError,
 )
-from reroll.name_mapping import NameMappers, passthrough_mapper, static_mapper
+from reroll.name_mapping import (
+    NameMappers,
+    aggregator_mapper,
+    is_passthrough,
+    passthrough_mapper,
+    static_mapper,
+)
 from reroll.subdir import CondaSubdir
 from reroll.wheel_metadata import WheelMetadata
 from reroll.wheel_record import WheelRecord, get_wheel_records
@@ -96,6 +103,9 @@ class TestWheelRecordModel:
     def test_rejects_an_invalid_extra_name_key(self) -> None:
         with pytest.raises(UnconvertableRequirementError):
             _record(extra_depends={"Not Valid": ()})
+
+    def test_resolutions_default_to_empty(self) -> None:
+        assert _record().resolutions == ()
 
 
 # --------------------------------------------------------------------------
@@ -189,6 +199,81 @@ class TestNoarchRecord:
         (record,) = get_wheel_records(metadata, "tinylib-1.2.3-py3-none-any.whl", mappers=mappers)
 
         assert record.name == "tiny-lib"
+
+
+# --------------------------------------------------------------------------
+# `get_wheel_records`: `WheelRecord.resolutions` (the resolved PyPI names
+# behind a record's own name and its dependencies)
+# --------------------------------------------------------------------------
+
+
+class TestResolutions:
+    def test_own_name_resolution_is_included(self) -> None:
+        metadata = _metadata()
+        mappers: NameMappers = (static_mapper({"tinylib": "tiny-lib"}), aggregator_mapper)
+
+        (record,) = get_wheel_records(metadata, "tinylib-1.2.3-py3-none-any.whl", mappers=mappers)
+
+        (resolution,) = record.resolutions
+        assert resolution.pypi_name == "tinylib"
+        assert resolution.winner.conda_name == "tiny-lib"
+
+    def test_dependency_name_resolutions_are_included(self) -> None:
+        metadata = _metadata(requires_dist=("requests>=2.0.0",))
+        mappers: NameMappers = (
+            static_mapper({"tinylib": "tinylib", "requests": "python-requests"}),
+            aggregator_mapper,
+        )
+
+        (record,) = get_wheel_records(metadata, "tinylib-1.2.3-py3-none-any.whl", mappers=mappers)
+
+        pypi_names = {resolution.pypi_name for resolution in record.resolutions}
+        assert pypi_names == {"tinylib", "requests"}
+
+    def test_converted_and_unconverted_names_are_distinguishable_via_is_passthrough(self) -> None:
+        metadata = _metadata(requires_dist=("requests>=2.0.0", "click==8.*"))
+        mappers: NameMappers = (
+            static_mapper({"tinylib": "tinylib", "requests": "python-requests"}),
+            aggregator_mapper,
+            passthrough_mapper,
+        )
+
+        (record,) = get_wheel_records(metadata, "tinylib-1.2.3-py3-none-any.whl", mappers=mappers)
+
+        converted = {r.pypi_name for r in record.resolutions if not is_passthrough(r.winner)}
+        unconverted = {r.pypi_name for r in record.resolutions if is_passthrough(r.winner)}
+        assert converted == {"tinylib", "requests"}
+        assert unconverted == {"click"}
+
+    def test_repeated_dependency_names_are_deduplicated(self) -> None:
+        """`click` appears in both `depends` (unconditionally) and
+        `standard`'s `extra_depends` (docs/wheel_to_conda_dependencies.md's
+        "Splitting base dependencies from extras") -- its `NameResolution`
+        must not be listed twice.
+        """
+        metadata = _metadata(
+            requires_dist=(
+                "click>=8.0",
+                'click>=8.0; extra == "standard"',
+            )
+        )
+
+        (record,) = get_wheel_records(metadata, "tinylib-1.2.3-py3-none-any.whl", mappers=_MAPPERS)
+
+        pypi_names = [resolution.pypi_name for resolution in record.resolutions]
+        assert pypi_names.count(canonicalize_name("click")) == 1
+
+    def test_resolutions_are_excluded_from_serialization(self) -> None:
+        """`name_resolutions` (the raw field `resolutions` is computed
+        from) is provenance metadata, not part of the repodata record
+        shape (docs/wheel_record.md) -- it must not leak into
+        `model_dump()`.
+        """
+        metadata = _metadata()
+
+        (record,) = get_wheel_records(metadata, "tinylib-1.2.3-py3-none-any.whl", mappers=_MAPPERS)
+
+        assert "name_resolutions" not in record.model_dump()
 
 
 # --------------------------------------------------------------------------

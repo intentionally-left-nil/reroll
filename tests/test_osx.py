@@ -4,6 +4,17 @@ from __future__ import annotations
 
 from reroll.dependencies.osx import osx_dependency
 from reroll.filename import Arch, WheelConfig
+from reroll.name_mapping import CandidateSource, NameResolution, Winner
+
+_NAME_RESOLUTION = NameResolution(
+    pypi_name="tinylib",
+    winner=Winner(
+        conda_name="tinylib",
+        probability=0.0,
+        source=CandidateSource.PASSTHROUGH,
+        mapper="passthrough_mapper",
+    ),
+)
 
 
 def _config(*, platform: str, arch: Arch | None) -> WheelConfig:
@@ -19,6 +30,7 @@ def _config(*, platform: str, arch: Arch | None) -> WheelConfig:
         abi="cp313",
         platform=platform,
         arch=arch,
+        name_resolution=_NAME_RESOLUTION,
     )
 
 

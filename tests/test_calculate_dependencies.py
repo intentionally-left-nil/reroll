@@ -13,9 +13,27 @@ from reroll.errors import (
     UnconvertableRequirementError,
 )
 from reroll.filename import WheelConfig
-from reroll.name_mapping import NameMappers, aggregator_mapper, passthrough_mapper, static_mapper
+from reroll.name_mapping import (
+    CandidateSource,
+    NameMappers,
+    NameResolution,
+    Winner,
+    aggregator_mapper,
+    passthrough_mapper,
+    static_mapper,
+)
 from reroll.subdir import CondaSubdir
 from reroll.wheel_metadata import WheelMetadata
+
+_NAME_RESOLUTION = NameResolution(
+    pypi_name="tinylib",
+    winner=Winner(
+        conda_name="tinylib",
+        probability=0.0,
+        source=CandidateSource.PASSTHROUGH,
+        mapper="passthrough_mapper",
+    ),
+)
 
 
 def _config(*, interpreter: str = "py3", abi: str = "none") -> WheelConfig:
@@ -31,6 +49,7 @@ def _config(*, interpreter: str = "py3", abi: str = "none") -> WheelConfig:
         abi=abi,
         platform="any",
         arch=None,
+        name_resolution=_NAME_RESOLUTION,
     )
 
 

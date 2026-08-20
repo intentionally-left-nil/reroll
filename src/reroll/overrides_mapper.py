@@ -33,8 +33,9 @@ _TABLE = {
 def overrides_mapper() -> NameMapper:
     """Build a `NameMapper` from `_TABLE`.
 
-    A hit returns its conda name directly, ending the chain immediately --
-    same as any other static override table (`reroll.name_mapping.static_mapper`).
-    A miss returns `candidates` unchanged.
+    A hit returns a `Winner`, ending the chain immediately -- same as any
+    other static override table (`reroll.name_mapping.static_mapper`),
+    attributed to `"overrides_mapper"` rather than the generic
+    `static_mapper` default. A miss returns `candidates` unchanged.
     """
-    return static_mapper(_TABLE)
+    return static_mapper(_TABLE, mapper_name="overrides_mapper")

@@ -31,7 +31,7 @@ def matchspec_version(specifier: str, *, allow_pre: bool = False) -> str:
     `">=1.0.0,<2.0.0"` or `"~=3.13.2"`), via the same production code a
     real dependency's version goes through.
     """
-    matchspec = pep508_to_matchspec(
+    matchspec, _resolution = pep508_to_matchspec(
         f"{_PACKAGE_NAME}{specifier}", (passthrough_mapper,), allow_pre=allow_pre
     )
     return matchspec.removeprefix(f"{_PACKAGE_NAME} ")

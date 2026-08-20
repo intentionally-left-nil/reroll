@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from packaging.utils import canonicalize_name
 
-from reroll.name_mapping import Candidate, CandidateSource, map_name
+from reroll.name_mapping import Candidate, CandidateSource, Winner, map_name
 from reroll.overrides_mapper import overrides_mapper
 
 _TABLE = {
@@ -49,14 +49,23 @@ class TestOverridesMapperHit:
 
         result = mapper(canonicalize_name(pypi_name), ())
 
-        assert result == conda_name
+        assert isinstance(result, Winner)
+        assert result.conda_name == conda_name
 
-    def test_hit_ends_the_chain_the_result_is_a_str(self) -> None:
+    def test_hit_ends_the_chain_the_result_is_a_winner(self) -> None:
         mapper = overrides_mapper()
 
         result = mapper(canonicalize_name("onnxruntime-gpu"), ())
 
-        assert isinstance(result, str)
+        assert isinstance(result, Winner)
+
+    def test_hit_is_attributed_to_overrides_mapper(self) -> None:
+        mapper = overrides_mapper()
+
+        result = mapper(canonicalize_name("onnxruntime-gpu"), ())
+
+        assert isinstance(result, Winner)
+        assert result.mapper == "overrides_mapper"
 
     def test_hit_ignores_candidates_from_earlier_mappers(self) -> None:
         mapper = overrides_mapper()
@@ -64,7 +73,8 @@ class TestOverridesMapperHit:
 
         result = mapper(canonicalize_name("modal"), earlier)
 
-        assert result == "modal-client"
+        assert isinstance(result, Winner)
+        assert result.conda_name == "modal-client"
 
 
 # --------------------------------------------------------------------------
@@ -100,4 +110,4 @@ class TestOverridesMapperEndToEnd:
 
         result = map_name("onnxruntime-gpu", (mapper,))
 
-        assert result == "onnxruntime"
+        assert result.conda_name == "onnxruntime"

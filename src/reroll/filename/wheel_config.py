@@ -13,6 +13,7 @@ from reroll.filename.interpreter import parse_interpreter
 from reroll.filename.platform import PlatformInfo, classify_platform
 from reroll.filename.py_version import PyVersion
 from reroll.filename.python_requirement import PythonRequirement
+from reroll.name_mapping import NameResolution
 
 
 class WheelConfig(BaseModel):
@@ -22,7 +23,8 @@ class WheelConfig(BaseModel):
     `normalized_pypi_name`/`conda_name`/`version`/`build` are repeated on
     every config derived from one filename even though they are invariant
     across them, because a consumer iterating configs to emit records needs
-    them on each item.
+    them on each item. `name_resolution` is the `NameResolution` `conda_name`
+    itself came from -- also invariant, for the same reason.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -35,6 +37,7 @@ class WheelConfig(BaseModel):
     abi: str
     platform: str
     arch: Arch | None
+    name_resolution: NameResolution
 
     _platform_info: PlatformInfo = PrivateAttr()
     """Cached result of classifying `platform`, computed once by

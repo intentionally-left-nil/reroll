@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from markerpry import TRUE, parse_marker
 from packaging.requirements import Requirement
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from reroll.dependencies.conditional_dependency import conditional_dependency
 from reroll.dependencies.extras import find_extras
@@ -17,7 +17,7 @@ from reroll.dependencies.python import exact_minor, python_dependencies
 from reroll.dependencies.requires_dist import strip_interpreter_requirements
 from reroll.filename import WheelConfig
 from reroll.matchspec import CondaExtraName, MatchSpecStr
-from reroll.name_mapping import NameMappers
+from reroll.name_mapping import NameMappers, NameResolution
 from reroll.subdir import CondaSubdir
 from reroll.wheel_metadata import WheelMetadata
 
@@ -38,12 +38,19 @@ class WheelDependencies(BaseModel):
     string match from the latter, per docs/wheel_to_conda_dependencies.md's
     "Splitting base dependencies from extras". Two different extras may
     still share a MatchSpec between themselves; that's not deduplicated.
+
+    `name_resolutions` carries one `NameResolution` per `Requires-Dist`
+    name lookup that went into `depends`/`extra_depends` -- not
+    deduplicated, and not part of `depends`/`extra_depends`'
+    MatchSpec-per-string public contract, but available to a caller that
+    wants the provenance behind those names (`reroll.wheel_record.WheelRecord.resolutions`).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     depends: tuple[MatchSpecStr, ...]
     extra_depends: dict[CondaExtraName, tuple[MatchSpecStr, ...]]
+    name_resolutions: tuple[NameResolution, ...] = Field(default=(), exclude=True)
 
 
 def calculate_dependencies(
@@ -101,10 +108,11 @@ def calculate_dependencies(
 
     depends: list[str] = []
     extra_depends: dict[str, list[str]] = {name: [] for name in extra_names}
+    name_resolutions: list[NameResolution] = []
     for extra_name in ("", *extra_names):
         target = depends if extra_name == "" else extra_depends[extra_name]
         for entry in requires_dist:
-            matchspec = _entry_dependency(
+            result = _entry_dependency(
                 entry,
                 extra=extra_name,
                 python_minor=python_minor,
@@ -113,8 +121,10 @@ def calculate_dependencies(
                 allow_pre=allow_pre,
                 abi3_upper_bound=abi3_upper_bound,
             )
-            if matchspec is not None:
+            if result is not None:
+                matchspec, name_resolution = result
                 target.append(matchspec)
+                name_resolutions.append(name_resolution)
 
     depends.extend(python_dependencies(config, metadata, allow_pre=allow_pre))
     glibc = glibc_dependency(config)
@@ -126,6 +136,7 @@ def calculate_dependencies(
     return WheelDependencies(
         depends=tuple(depends),
         extra_depends=_dedupe_extras(depends, extra_depends),
+        name_resolutions=tuple(name_resolutions),
     )
 
 
@@ -138,9 +149,10 @@ def _entry_dependency(
     mappers: NameMappers,
     allow_pre: bool,
     abi3_upper_bound: str | None,
-) -> str | None:
-    """`entry`'s MatchSpec for `extra`'s environment, or `None` if
-    `entry`'s marker rules it out entirely.
+) -> tuple[str, NameResolution] | None:
+    """`entry`'s MatchSpec (paired with its name's `NameResolution`) for
+    `extra`'s environment, or `None` if `entry`'s marker rules it out
+    entirely.
     """
     requirement = Requirement(entry)
     marker_node = parse_marker(requirement.marker) if requirement.marker is not None else TRUE

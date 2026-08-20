@@ -42,6 +42,7 @@ from reroll.name_mapping import (
     Candidate,
     NameMappers,
     aggregator_mapper,
+    passthrough_mapper,
 )
 
 
@@ -1067,7 +1068,7 @@ class TestAbi3FloorIsPoint2:
 
 class TestParseFilename:
     def test_happy_path(self) -> None:
-        (config,) = parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(aggregator_mapper,))
+        (config,) = parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(passthrough_mapper,))
 
         assert config.normalized_pypi_name == "tinylib"
         assert config.version == Version("1.2.3")
@@ -1077,20 +1078,22 @@ class TestParseFilename:
         assert config.arch is None
 
     def test_compressed_tags_expand_to_multiple_configs(self) -> None:
-        configs = parse_filename("tinylib-1.2.3-py2.py3-none-any.whl", mappers=(aggregator_mapper,))
+        configs = parse_filename(
+            "tinylib-1.2.3-py2.py3-none-any.whl", mappers=(passthrough_mapper,)
+        )
 
         assert [c.interpreter for c in configs] == ["py3"]
 
     def test_compressed_tags_expand_all_valid_combinations(self) -> None:
         configs = parse_filename(
-            "tinylib-1.2.3-py38.py39-none-any.whl", mappers=(aggregator_mapper,)
+            "tinylib-1.2.3-py38.py39-none-any.whl", mappers=(passthrough_mapper,)
         )
 
         assert [c.interpreter for c in configs] == ["py38", "py39"]
 
     def test_universal2_produces_exactly_two_configs(self) -> None:
         configs = parse_filename(
-            "tinylib-1.2.3-cp313-cp313-macosx_10_9_universal2.whl", mappers=(aggregator_mapper,)
+            "tinylib-1.2.3-cp313-cp313-macosx_10_9_universal2.whl", mappers=(passthrough_mapper,)
         )
 
         assert len(configs) == 2
@@ -1098,21 +1101,21 @@ class TestParseFilename:
 
     def test_unparseable_filename_raises(self) -> None:
         with pytest.raises(InvalidFilenameError):
-            parse_filename("not-a-wheel-filename", mappers=(aggregator_mapper,))
+            parse_filename("not-a-wheel-filename", mappers=(passthrough_mapper,))
 
     def test_unparseable_filename_logs_at_warning(self, caplog: pytest.LogCaptureFixture) -> None:
         with (
             caplog.at_level(logging.WARNING, logger="reroll.invalid"),
             pytest.raises(InvalidFilenameError),
         ):
-            parse_filename("not-a-wheel-filename", mappers=(aggregator_mapper,))
+            parse_filename("not-a-wheel-filename", mappers=(passthrough_mapper,))
 
         assert "unparseable" in caplog.text
 
     def test_all_tags_unsupported_raises(self) -> None:
         with pytest.raises(UnsupportedPlatformError):
             parse_filename(
-                "tinylib-1.2.3-cp313-cp313-musllinux_1_2_x86_64.whl", mappers=(aggregator_mapper,)
+                "tinylib-1.2.3-cp313-cp313-musllinux_1_2_x86_64.whl", mappers=(passthrough_mapper,)
             )
 
     def test_rejection_logs_at_debug(self, caplog: pytest.LogCaptureFixture) -> None:
@@ -1122,14 +1125,14 @@ class TestParseFilename:
         ):
             parse_filename(
                 "tinylib-1.2.3-cp313-cp313-musllinux_1_2_x86_64.whl",
-                mappers=(aggregator_mapper,),
+                mappers=(passthrough_mapper,),
             )
 
         assert "rejected" in caplog.text
 
     def test_build_tag_is_parsed(self) -> None:
         (config,) = parse_filename(
-            "tinylib-1.2.3-1mybuild-py3-none-any.whl", mappers=(aggregator_mapper,)
+            "tinylib-1.2.3-1mybuild-py3-none-any.whl", mappers=(passthrough_mapper,)
         )
 
         assert config.build == (1, "mybuild")
@@ -1141,7 +1144,7 @@ class TestParseFilename:
         `parse_filename` entry point rather than `WheelConfig` directly.
         """
         (config,) = parse_filename(
-            "tinylib-1.2.3-cp313-cp313mu-manylinux_2_17_x86_64.whl", mappers=(aggregator_mapper,)
+            "tinylib-1.2.3-cp313-cp313mu-manylinux_2_17_x86_64.whl", mappers=(passthrough_mapper,)
         )
 
         assert config.abi == "cp313"
@@ -1150,14 +1153,14 @@ class TestParseFilename:
         with pytest.raises(InvalidAbiTagError):
             parse_filename(
                 "tinylib-1.2.3-cp313-cp313dmu-manylinux_2_17_x86_64.whl",
-                mappers=(aggregator_mapper,),
+                mappers=(passthrough_mapper,),
             )
 
     def test_sort_is_deterministic_across_calls(self) -> None:
         filename = "tinylib-1.2.3-py38.py39.py310-none-any.whl"
 
-        first = parse_filename(filename, mappers=(aggregator_mapper,))
-        second = parse_filename(filename, mappers=(aggregator_mapper,))
+        first = parse_filename(filename, mappers=(passthrough_mapper,))
+        second = parse_filename(filename, mappers=(passthrough_mapper,))
 
         assert first == second
         assert [c.interpreter for c in first] == ["py310", "py38", "py39"]
@@ -1168,7 +1171,7 @@ class TestParseFilename:
         installable one.
         """
         configs = parse_filename(
-            "tinylib-1.2.3-py3.cp313-none-any.whl", mappers=(aggregator_mapper,)
+            "tinylib-1.2.3-py3.cp313-none-any.whl", mappers=(passthrough_mapper,)
         )
 
         assert {c.interpreter for c in configs} == {"py3", "cp313"}
@@ -1184,7 +1187,7 @@ class TestParseFilename:
         """
         with pytest.raises(InvalidAbiTagError):
             parse_filename(
-                "tinylib-1.2.3-py312.py313-cp312.cp313-any.whl", mappers=(aggregator_mapper,)
+                "tinylib-1.2.3-py312.py313-cp312.cp313-any.whl", mappers=(passthrough_mapper,)
             )
 
 
@@ -1197,7 +1200,7 @@ class TestParseFilenameAbi3Explosion:
     def test_abi3_wheel_explodes_into_one_config_per_minor(self) -> None:
         configs = parse_filename(
             "tinylib-1.2.3-cp39-abi3-manylinux_2_17_x86_64.whl",
-            mappers=(aggregator_mapper,),
+            mappers=(passthrough_mapper,),
             abi3_upper_bound="3.11",
         )
 
@@ -1210,7 +1213,7 @@ class TestParseFilenameAbi3Explosion:
     def test_abi3t_wheel_explodes_with_the_free_threaded_abi(self) -> None:
         configs = parse_filename(
             "tinylib-1.2.3-cp315-abi3t-manylinux_2_17_x86_64.whl",
-            mappers=(aggregator_mapper,),
+            mappers=(passthrough_mapper,),
             abi3_upper_bound="3.16",
         )
 
@@ -1230,7 +1233,7 @@ class TestParseFilenameAbi3Explosion:
         """
         configs = parse_filename(
             f"tinylib-1.2.3-cp3{start_minor}-abi3-manylinux_2_17_x86_64.whl",
-            mappers=(aggregator_mapper,),
+            mappers=(passthrough_mapper,),
             abi3_upper_bound="3.5",
         )
 
@@ -1247,7 +1250,7 @@ class TestParseFilenameAbi3Explosion:
         with pytest.raises(InvalidAbiTagError):
             parse_filename(
                 f"tinylib-1.2.3-cp3{minor}-abi3-manylinux_2_17_x86_64.whl",
-                mappers=(aggregator_mapper,),
+                mappers=(passthrough_mapper,),
                 abi3_upper_bound="3.6",
             )
 
@@ -1261,7 +1264,7 @@ class TestParseFilenameAbi3Explosion:
         with pytest.raises(InvalidAbiTagError):
             parse_filename(
                 "tinylib-1.2.3-cp310-abi3t-manylinux_2_17_x86_64.whl",
-                mappers=(aggregator_mapper,),
+                mappers=(passthrough_mapper,),
                 abi3_upper_bound="3.16",
             )
 
@@ -1272,7 +1275,7 @@ class TestParseFilenameAbi3Explosion:
         """
         configs = parse_filename(
             "tinylib-1.2.3-cp39.cp310-abi3-manylinux_2_17_x86_64.whl",
-            mappers=(aggregator_mapper,),
+            mappers=(passthrough_mapper,),
             abi3_upper_bound="3.10",
         )
 
@@ -1285,7 +1288,7 @@ class TestParseFilenameAbi3Explosion:
         monkeypatch.setattr("reroll.filename.python_latest_release.latest_python_minor", lambda: 11)
 
         configs = parse_filename(
-            "tinylib-1.2.3-cp39-abi3-manylinux_2_17_x86_64.whl", mappers=(aggregator_mapper,)
+            "tinylib-1.2.3-cp39-abi3-manylinux_2_17_x86_64.whl", mappers=(passthrough_mapper,)
         )
 
         assert {c.interpreter for c in configs} == {"cp39", "cp310", "cp311"}
@@ -1299,7 +1302,7 @@ class TestParseFilenameAbi3Explosion:
         monkeypatch.setattr("reroll.filename.python_latest_release.latest_python_minor", _fail)
 
         parse_filename(
-            "tinylib-1.2.3-cp313-cp313-manylinux_2_17_x86_64.whl", mappers=(aggregator_mapper,)
+            "tinylib-1.2.3-cp313-cp313-manylinux_2_17_x86_64.whl", mappers=(passthrough_mapper,)
         )
 
 
@@ -1329,7 +1332,7 @@ class TestParseFilenameEmptyTagsAfterAbi3Explosion:
         with pytest.raises(RerollError):
             parse_filename(
                 "ast_serialize-0.7.0-cp315-abi3.abi3t-macosx_10_12_x86_64.whl",
-                mappers=(aggregator_mapper,),
+                mappers=(passthrough_mapper,),
                 abi3_upper_bound="3.13",
             )
 
@@ -1349,7 +1352,7 @@ class TestParseFilenameAllowPre:
     )
     def test_prerelease_version_rejected_by_default(self, version: str) -> None:
         with pytest.raises(UnsupportedPrereleaseError):
-            parse_filename(f"tinylib-{version}-py3-none-any.whl", mappers=(aggregator_mapper,))
+            parse_filename(f"tinylib-{version}-py3-none-any.whl", mappers=(passthrough_mapper,))
 
     @pytest.mark.parametrize(
         "version",
@@ -1359,7 +1362,7 @@ class TestParseFilenameAllowPre:
     def test_prerelease_version_allowed_with_allow_pre(self, version: str) -> None:
         (config,) = parse_filename(
             f"tinylib-{version}-py3-none-any.whl",
-            mappers=(aggregator_mapper,),
+            mappers=(passthrough_mapper,),
             allow_pre=True,
         )
 
@@ -1370,7 +1373,7 @@ class TestParseFilenameAllowPre:
         accepted whether or not the flag is set.
         """
         (config,) = parse_filename(
-            "tinylib-1.2.3.post1-py3-none-any.whl", mappers=(aggregator_mapper,)
+            "tinylib-1.2.3.post1-py3-none-any.whl", mappers=(passthrough_mapper,)
         )
 
         assert config.version == Version("1.2.3.post1")
@@ -1380,14 +1383,14 @@ class TestParseFilenameAllowPre:
             caplog.at_level(logging.INFO, logger="reroll.scope"),
             pytest.raises(UnsupportedPrereleaseError),
         ):
-            parse_filename("tinylib-1.2.3rc1-py3-none-any.whl", mappers=(aggregator_mapper,))
+            parse_filename("tinylib-1.2.3rc1-py3-none-any.whl", mappers=(passthrough_mapper,))
 
         assert caplog.records
         assert all(record.levelno == logging.INFO for record in caplog.records)
 
     def test_allow_pre_defaults_to_false(self) -> None:
         with pytest.raises(UnsupportedPrereleaseError):
-            parse_filename("tinylib-1.2.3rc1-py3-none-any.whl", mappers=(aggregator_mapper,))
+            parse_filename("tinylib-1.2.3rc1-py3-none-any.whl", mappers=(passthrough_mapper,))
 
 
 # --------------------------------------------------------------------------
@@ -1402,8 +1405,8 @@ class TestParseFilenameNameMapping:
         with pytest.raises(ValueError, match="at least one mapper"):
             parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=empty)
 
-    def test_aggregator_mapper_falls_back_to_normalized_pypi_name(self) -> None:
-        (config,) = parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(aggregator_mapper,))
+    def test_passthrough_mapper_falls_back_to_normalized_pypi_name(self) -> None:
+        (config,) = parse_filename("tinylib-1.2.3-py3-none-any.whl", mappers=(passthrough_mapper,))
 
         assert config.conda_name == config.normalized_pypi_name == "tinylib"
 
@@ -1432,7 +1435,7 @@ class TestParseFilenameNameMapping:
 
         configs = parse_filename(
             "tinylib-1.2.3-cp313-cp313-macosx_10_9_universal2.whl",
-            mappers=(_mapper, aggregator_mapper),
+            mappers=(_mapper, aggregator_mapper, passthrough_mapper),
         )
 
         assert len(configs) == 2

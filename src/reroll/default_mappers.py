@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from reroll.conda_lock_mapper import conda_lock_mapper
 from reroll.grayskull_mapper import grayskull_mapper
-from reroll.name_mapping import NameMappers, aggregator_mapper
+from reroll.name_mapping import NameMappers, aggregator_mapper, passthrough_mapper
 from reroll.overrides_mapper import overrides_mapper
 from reroll.parselmouth_mapper import parselmouth_mapper
 
@@ -12,7 +12,9 @@ from reroll.parselmouth_mapper import parselmouth_mapper
 def default_mappers() -> NameMappers:
     """Build the default chain: grayskull, then conda-lock, then the
     hand-maintained overrides table, then parselmouth, with
-    `aggregator_mapper` deciding last.
+    `aggregator_mapper` deciding from their candidates, and
+    `passthrough_mapper` falling back to the normalized PyPI name if
+    nobody had an opinion.
 
     Each call builds a fresh tuple of mappers -- there is no shared state
     for callers to accidentally mutate.
@@ -23,4 +25,5 @@ def default_mappers() -> NameMappers:
         overrides_mapper(),
         parselmouth_mapper(),
         aggregator_mapper,
+        passthrough_mapper,
     )

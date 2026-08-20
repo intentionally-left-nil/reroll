@@ -58,7 +58,7 @@ def map_name(name: str, mappers: NameMappers) -> str:
     `mappers` must be non-empty -- enforced by its type (`NameMappers`) and,
     at runtime, by a `ValueError`. A caller that wants "no mapper has an
     opinion, just use the normalized PyPI name" must request that policy
-    explicitly by ending the chain with `aggregator_mapper`
+    explicitly by ending the chain with `passthrough_mapper`
 
     `name` is canonicalized before any mapper sees it
 
@@ -81,18 +81,19 @@ def aggregator_mapper(
     name: NormalizedName,
     candidates: Sequence[Candidate],
 ) -> str | Sequence[Candidate]:
-    """A `NameMapper` meant to be placed last in a chain, deciding a final
-    conda name from the `Candidate`s earlier mappers contributed.
+    """A `NameMapper` deciding a final conda name from the `Candidate`s
+    earlier mappers contributed.
 
     Decision order: the first grayskull candidate; the first certain
     (probability 1.0) conda-lock candidate; a name proposed by two or more
     distinct mappers; parselmouth's only candidate; or a sole mapper's best
-    candidate scoring at least 0.9. Anything else defers by returning
-    `candidates` unchanged; empty `candidates` falls back to the normalized
-    PyPI `name`.
+    candidate scoring at least 0.9. Anything else -- including empty
+    `candidates` -- defers by returning `candidates` unchanged: this mapper
+    has an opinion only about candidates it's given, never about an
+    unopinionated PyPI name (`passthrough_mapper` covers that case).
     """
     if not candidates:
-        return name
+        return candidates
     for candidate in candidates:
         if candidate.source is CandidateSource.GRAYSKULL:
             return candidate.conda_name
@@ -109,6 +110,23 @@ def aggregator_mapper(
         if best.probability >= 0.9:
             return best.conda_name
     return candidates
+
+
+def passthrough_mapper(
+    name: NormalizedName,
+    candidates: Sequence[Candidate],
+) -> str | Sequence[Candidate]:
+    """A `NameMapper` committing to the normalized PyPI `name` itself, but
+    only when nobody earlier in the chain has anything to say: empty
+    `candidates` resolves to `name`; non-empty `candidates` defer by
+    returning them unchanged, since a name with candidates nobody committed
+    to is ambiguous, not unopinionated.
+
+    Meant to be placed last in a chain that wants "no mapper has an
+    opinion, just use the normalized PyPI name" as an explicit, opt-in
+    policy (`map_name`).
+    """
+    return candidates if candidates else name
 
 
 def static_mapper(table: Mapping[str, str]) -> NameMapper:

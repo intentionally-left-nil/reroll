@@ -6,13 +6,13 @@ import pytest
 
 import reroll
 from reroll.errors import UnconvertableRequirementError
-from reroll.name_mapping import aggregator_mapper, static_mapper
+from reroll.name_mapping import passthrough_mapper, static_mapper
 
 
 class TestToMatchspec:
     def test_converts_a_pep_508_entry_to_a_matchspec(self) -> None:
         assert (
-            reroll.to_matchspec("requests>=2.0.0", mappers=(aggregator_mapper,))
+            reroll.to_matchspec("requests>=2.0.0", mappers=(passthrough_mapper,))
             == "requests >=2.0.0"
         )
 
@@ -22,9 +22,9 @@ class TestToMatchspec:
         network/db-backed mappers (docs/pypi_conda_mapping.md) that aren't
         available in CI -- with a stand-in that resolves this name the
         same way the real chain does: falling through to the bare
-        `aggregator_mapper` normalization.
+        `passthrough_mapper` normalization.
         """
-        monkeypatch.setattr(reroll, "default_mappers", lambda: (aggregator_mapper,))
+        monkeypatch.setattr(reroll, "default_mappers", lambda: (passthrough_mapper,))
 
         assert (
             reroll.to_matchspec('packageA ; python_version < "3.9"')
@@ -37,7 +37,7 @@ class TestToMatchspec:
         """`to_matchspec()` itself has no opinion on the default -- it just
         falls back to `default_mappers()` when `mappers` is `None`.
         """
-        monkeypatch.setattr(reroll, "default_mappers", lambda: (aggregator_mapper,))
+        monkeypatch.setattr(reroll, "default_mappers", lambda: (passthrough_mapper,))
 
         assert reroll.to_matchspec("requests") == "requests"
 
@@ -47,7 +47,7 @@ class TestToMatchspec:
         def _unused_default_mappers() -> tuple[object, ...]:
             nonlocal calls
             calls += 1
-            return (aggregator_mapper,)
+            return (passthrough_mapper,)
 
         monkeypatch.setattr(reroll, "default_mappers", _unused_default_mappers)
 
@@ -61,10 +61,10 @@ class TestToMatchspec:
 
     def test_allow_pre_is_passed_through(self) -> None:
         assert (
-            reroll.to_matchspec("requests==1.0.0rc1", mappers=(aggregator_mapper,), allow_pre=True)
+            reroll.to_matchspec("requests==1.0.0rc1", mappers=(passthrough_mapper,), allow_pre=True)
             == "requests ==1.0.0.rc1"
         )
 
     def test_allow_pre_defaults_to_false(self) -> None:
         with pytest.raises(UnconvertableRequirementError, match="pre-release"):
-            reroll.to_matchspec("requests==1.0.0rc1", mappers=(aggregator_mapper,))
+            reroll.to_matchspec("requests==1.0.0rc1", mappers=(passthrough_mapper,))

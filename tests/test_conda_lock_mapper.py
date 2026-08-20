@@ -30,6 +30,7 @@ from reroll.name_mapping import (
     CandidateSource,
     aggregator_mapper,
     map_name,
+    passthrough_mapper,
 )
 
 
@@ -604,7 +605,9 @@ class TestCondaLockMapperEndToEnd:
         mapper = conda_lock_mapper(
             mapping_url=mapping, priority_url=priority, name_mapping_url=names
         )
-        assert map_name("No_Such.Pkg", (mapper, aggregator_mapper)) == "no-such-pkg"
+        assert map_name("No_Such.Pkg", (mapper, aggregator_mapper, passthrough_mapper)) == (
+            "no-such-pkg"
+        )
 
 
 # --------------------------------------------------------------------------

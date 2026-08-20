@@ -6,7 +6,7 @@ import importlib
 
 import pytest
 
-from reroll.name_mapping import aggregator_mapper
+from reroll.name_mapping import aggregator_mapper, passthrough_mapper
 
 # `import reroll.default_mappers` would resolve to the function re-exported
 # by `reroll/__init__.py` (it shadows the submodule of the same name), so
@@ -16,8 +16,8 @@ _default_mappers_module = importlib.import_module("reroll.default_mappers")
 # Each of grayskull_mapper, conda_lock_mapper, overrides_mapper, and
 # parselmouth_mapper is fully tested in its own module; here we only need
 # to confirm `default_mappers` calls all four in order and appends
-# `aggregator_mapper` last, so the factories are stubbed out rather than
-# built for real.
+# `aggregator_mapper` then `passthrough_mapper` last, so the factories are
+# stubbed out rather than built for real.
 
 
 class TestDefaultMappers:
@@ -39,4 +39,5 @@ class TestDefaultMappers:
             overrides_stub,
             parselmouth_stub,
             aggregator_mapper,
+            passthrough_mapper,
         )

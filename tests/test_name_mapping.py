@@ -18,6 +18,7 @@ from reroll.name_mapping import (
     NameMappers,
     aggregator_mapper,
     map_name,
+    passthrough_mapper,
     static_mapper,
 )
 
@@ -547,24 +548,15 @@ def _parselmouth_candidate(conda_name: str, probability: float) -> Candidate:
 
 
 class TestAggregatorMapper:
-    def test_empty_candidates_resolves_to_the_normalized_name(self) -> None:
+    def test_empty_candidates_defers(self) -> None:
+        """Unlike a mapper contributing an opinion, empty `candidates`
+        means nobody has one yet -- `aggregator_mapper` defers rather than
+        inventing a fallback name itself (that's `passthrough_mapper`'s
+        job, placed explicitly later in the chain).
+        """
         result = aggregator_mapper(canonicalize_name("tinylib"), ())
 
-        assert result == "tinylib"
-
-    def test_fallback_does_not_enforce_the_64_character_limit(self) -> None:
-        """The normalized-name fallback is deferred entirely to whatever
-        consumes the final chosen name (e.g. `CondaPackageName` in
-        `reroll.filename.wheel_config`) -- `aggregator_mapper` itself
-        performs no length check, so an over-limit name passes straight
-        through rather than being rejected here.
-        """
-        long_name = canonicalize_name("a" * 65)
-
-        result = aggregator_mapper(long_name, ())
-
-        assert result == long_name
-        assert len(result) > 64
+        assert result == ()
 
     # A grayskull candidate is authoritative.
 
@@ -815,26 +807,6 @@ class TestAggregatorMapper:
 
     # End to end through `map_name`.
 
-    def test_used_end_to_end_falls_back_to_normalized_name(self) -> None:
-        assert map_name("Zope_Interface", (aggregator_mapper,)) == ("zope-interface")
-
-    def test_used_end_to_end_the_64_character_limit_is_not_enforced_by_map_name(self) -> None:
-        """`map_name` returns whatever string a mapper (here,
-        `aggregator_mapper`'s fallback) resolves to, uninspected -- CEP 26
-        length/shape validation is a downstream concern, not part of the
-        chain-resolution contract.
-        """
-        result = map_name("a" * 65, (aggregator_mapper,))
-
-        assert result == "a" * 65
-
-    def test_used_end_to_end_after_a_no_opinion_mapper(self) -> None:
-        no_opinion = _Spy(result=None)
-
-        result = map_name("tinylib", (no_opinion, aggregator_mapper))
-
-        assert result == "tinylib"
-
     def test_used_end_to_end_returns_the_name_the_aggregator_resolves(self) -> None:
         contributed = (_grayskull_candidate("python-annoy"),)
 
@@ -864,5 +836,95 @@ class TestAggregatorMapper:
 
         with pytest.raises(UnresolvedCondaNameError) as exc_info:
             map_name("tinylib", (_contributor, aggregator_mapper))
+
+        assert exc_info.value.candidates == contributed
+
+
+# --------------------------------------------------------------------------
+# `passthrough_mapper`
+# --------------------------------------------------------------------------
+
+
+class TestPassthroughMapper:
+    def test_empty_candidates_resolves_to_the_normalized_name(self) -> None:
+        result = passthrough_mapper(canonicalize_name("tinylib"), ())
+
+        assert result == "tinylib"
+
+    def test_fallback_does_not_enforce_the_64_character_limit(self) -> None:
+        """The normalized-name fallback is deferred entirely to whatever
+        consumes the final chosen name (e.g. `CondaPackageName` in
+        `reroll.filename.wheel_config`) -- `passthrough_mapper` itself
+        performs no length check, so an over-limit name passes straight
+        through rather than being rejected here.
+        """
+        long_name = canonicalize_name("a" * 65)
+
+        result = passthrough_mapper(long_name, ())
+
+        assert result == long_name
+        assert len(result) > 64
+
+    def test_non_empty_candidates_defer(self) -> None:
+        """A name with candidates nobody committed to is ambiguous, not
+        unopinionated -- `passthrough_mapper` leaves that decision to
+        whatever runs before it in the chain rather than overriding it.
+        """
+        candidates = (_candidate(),)
+
+        result = passthrough_mapper(canonicalize_name("tinylib"), candidates)
+
+        assert result is candidates
+
+    # End to end through `map_name`.
+
+    def test_used_end_to_end_alone_resolves_to_the_normalized_name(self) -> None:
+        assert map_name("Zope_Interface", (passthrough_mapper,)) == "zope-interface"
+
+    def test_used_end_to_end_the_64_character_limit_is_not_enforced_by_map_name(self) -> None:
+        """`map_name` returns whatever string a mapper (here,
+        `passthrough_mapper`'s fallback) resolves to, uninspected -- CEP 26
+        length/shape validation is a downstream concern, not part of the
+        chain-resolution contract.
+        """
+        result = map_name("a" * 65, (passthrough_mapper,))
+
+        assert result == "a" * 65
+
+    def test_used_end_to_end_after_a_no_opinion_mapper(self) -> None:
+        no_opinion = _Spy(result=None)
+
+        result = map_name("tinylib", (no_opinion, passthrough_mapper))
+
+        assert result == "tinylib"
+
+    def test_used_end_to_end_after_the_aggregator_defers(self) -> None:
+        """The intended composition (`default_mappers`): `aggregator_mapper`
+        gets first say over any contributed candidates, and
+        `passthrough_mapper` only ever resolves the names it left alone.
+        """
+        result = map_name("Zope_Interface", (aggregator_mapper, passthrough_mapper))
+
+        assert result == "zope-interface"
+
+    def test_used_end_to_end_does_not_mask_aggregator_ambiguity(self) -> None:
+        """Candidates the aggregator finds ambiguous stay ambiguous --
+        `passthrough_mapper` placed after it must not paper over that by
+        resolving to the normalized name anyway.
+        """
+        contributed = (
+            _conda_lock_candidate("x", 0.6),
+            _parselmouth_candidate("y", 0.5),
+        )
+
+        def _contributor(
+            name: NormalizedName,
+            candidates: Sequence[Candidate],
+        ) -> Sequence[Candidate]:
+            del name, candidates
+            return contributed
+
+        with pytest.raises(UnresolvedCondaNameError) as exc_info:
+            map_name("tinylib", (_contributor, aggregator_mapper, passthrough_mapper))
 
         assert exc_info.value.candidates == contributed

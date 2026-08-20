@@ -8,6 +8,7 @@ step of that pipeline (`extract_metadata_file`, `parse_metadata`,
 
 from __future__ import annotations
 
+from importlib.metadata import version
 from pathlib import Path
 
 from reroll.default_mappers import default_mappers
@@ -46,6 +47,7 @@ __all__ = [
     "UnresolvedCondaNameError",
     "WheelMetadata",
     "WheelRecord",
+    "__version__",
     "aggregator_mapper",
     "default_mappers",
     "map_name",
@@ -53,6 +55,8 @@ __all__ = [
     "reroll",
     "static_mapper",
 ]
+
+__version__ = version("py-reroll")
 
 
 def reroll(

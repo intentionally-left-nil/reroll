@@ -13,7 +13,7 @@ from reroll.errors import (
     UnconvertableRequirementError,
 )
 from reroll.filename import WheelConfig
-from reroll.name_mapping import NameMappers, aggregator_mapper, static_mapper
+from reroll.name_mapping import NameMappers, aggregator_mapper, passthrough_mapper, static_mapper
 from reroll.subdir import CondaSubdir
 from reroll.wheel_metadata import WheelMetadata
 
@@ -71,7 +71,7 @@ class TestNoRequiresDist:
         config = _config(interpreter="cp313", abi="cp313")
         metadata = _metadata()
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.depends == ("python >=3.13,<3.14a0", "python_abi 3.13.* *_cp313")
         assert result.extra_depends == {}
@@ -81,7 +81,7 @@ class TestNoRequiresDist:
         metadata = _metadata(requires_python=">=3.10")
 
         with pytest.raises(PythonRangeMismatchError):
-            _dependencies(config, metadata, (aggregator_mapper,))
+            _dependencies(config, metadata, (passthrough_mapper,))
 
 
 # --------------------------------------------------------------------------
@@ -95,7 +95,7 @@ class TestUnconditionalEntries:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=("requests>=2.0.0",))
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.depends == ("requests >=2.0.0", "python >=3.0")
 
@@ -103,7 +103,7 @@ class TestUnconditionalEntries:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=("requests>=2.0.0", "click==8.*"))
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.depends == ("requests >=2.0.0", "click =8", "python >=3.0")
 
@@ -111,7 +111,7 @@ class TestUnconditionalEntries:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=("python>=3.9", "requests>=2.0.0"))
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.depends == ("requests >=2.0.0", "python >=3.0")
 
@@ -119,7 +119,7 @@ class TestUnconditionalEntries:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=("requests[security]>=2.0.0",))
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.depends == ("requests >=2.0.0[extras=[security]]", "python >=3.0")
 
@@ -136,7 +136,7 @@ class TestUnconditionalEntries:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=("requests==1.0.0rc1",))
 
-        result = _dependencies(config, metadata, (aggregator_mapper,), allow_pre=True)
+        result = _dependencies(config, metadata, (passthrough_mapper,), allow_pre=True)
 
         assert result.depends == ("requests ==1.0.0.rc1", "python >=3.0")
 
@@ -145,7 +145,7 @@ class TestUnconditionalEntries:
         metadata = _metadata(requires_dist=("requests==1.0.0+local",))
 
         with pytest.raises(UnconvertableRequirementError, match="local version label"):
-            _dependencies(config, metadata, (aggregator_mapper,))
+            _dependencies(config, metadata, (passthrough_mapper,))
 
     def test_rejects_the_whole_record_for_a_direct_url_entry(self) -> None:
         """docs/wheel_to_conda_dependencies.md's "Simple dependency
@@ -166,14 +166,14 @@ class TestUnconditionalEntries:
         metadata = _metadata(requires_dist=("requests @ https://example.com/requests.whl",))
 
         with pytest.raises(UnconvertableRequirementError, match="direct URL"):
-            _dependencies(config, metadata, (aggregator_mapper,))
+            _dependencies(config, metadata, (passthrough_mapper,))
 
     def test_rejects_the_whole_record_for_a_prerelease_entry_without_allow_pre(self) -> None:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=("requests==1.0.0rc1",))
 
         with pytest.raises(UnconvertableRequirementError, match="pre-release"):
-            _dependencies(config, metadata, (aggregator_mapper,))
+            _dependencies(config, metadata, (passthrough_mapper,))
 
 
 # --------------------------------------------------------------------------
@@ -186,7 +186,7 @@ class TestResidualMarker:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=('requests>=2.0.0; python_version >= "3.9"',))
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.depends == (
             'requests >=2.0.0[when="python>=3.9.0a0"]',
@@ -201,7 +201,7 @@ class TestResidualMarker:
         config = _config(interpreter="cp313", abi="cp313")
         metadata = _metadata(requires_dist=('requests>=2.0.0; python_version == "3.13"',))
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.depends == (
             "requests >=2.0.0",
@@ -213,7 +213,7 @@ class TestResidualMarker:
         config = _config(interpreter="cp313", abi="cp313")
         metadata = _metadata(requires_dist=('requests>=2.0.0; python_version == "3.9"',))
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.depends == (
             "python >=3.13,<3.14a0",
@@ -240,7 +240,7 @@ class TestResidualMarker:
             requires_dist=('requests>=2.0.0; python_version < "3.10"',),
         )
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.depends == (
             'requests >=2.0.0[when="python<3.10.0a0"]',
@@ -259,7 +259,7 @@ class TestExtraOnlyDependency:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=('httpx>=0.23.0; extra == "standard"',))
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.depends == ("python >=3.0",)
         assert result.extra_depends == {"standard": ("httpx >=0.23.0",)}
@@ -273,7 +273,7 @@ class TestExtraOnlyDependency:
             )
         )
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.extra_depends == {
             "standard": ("httpx >=0.23.0", "jinja2 >=2.11.2"),
@@ -288,7 +288,7 @@ class TestExtraOnlyDependency:
             )
         )
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.extra_depends == {
             "standard": ("httpx >=0.23.0",),
@@ -299,7 +299,7 @@ class TestExtraOnlyDependency:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=('httpx>=0.23.0; extra == "Some_Extra.Name"',))
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.extra_depends == {"some-extra-name": ("httpx >=0.23.0",)}
 
@@ -316,7 +316,7 @@ class TestExtraOnlyDependency:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=("requests>=2.0.0",))
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.extra_depends == {}
 
@@ -325,7 +325,7 @@ class TestExtraOnlyDependency:
         metadata = _metadata(requires_dist=('requests==1.0.0+local; extra == "standard"',))
 
         with pytest.raises(UnconvertableRequirementError, match="local version label"):
-            _dependencies(config, metadata, (aggregator_mapper,))
+            _dependencies(config, metadata, (passthrough_mapper,))
 
     def test_entry_gains_an_extras_bracket_alongside_its_own_extra_marker(self) -> None:
         """`fastapi-cli[standard] (>=0.0.5) ; extra == "standard"` -- the
@@ -336,7 +336,7 @@ class TestExtraOnlyDependency:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=('fastapi-cli[standard]>=0.0.5; extra == "standard"',))
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.extra_depends == {
             "standard": ("fastapi-cli >=0.0.5[extras=[standard]]",),
@@ -361,7 +361,7 @@ class TestUnconditionalDependencyIsDedupedFromExtras:
             )
         )
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.depends == ("requests >=2.0.0", "python >=3.0")
         assert result.extra_depends == {"standard": ("httpx >=0.23.0",)}
@@ -380,7 +380,7 @@ class TestUnconditionalDependencyIsDedupedFromExtras:
             )
         )
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.depends == ("requests >=1.2", "python >=3.0")
         assert result.extra_depends == {"major-bump": ("requests >=2.0",)}
@@ -402,7 +402,7 @@ class TestUnconditionalDependencyIsDedupedFromExtras:
             )
         )
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.depends == ("requests >=1.0", "python >=3.0")
         assert result.extra_depends == {"standard": ("requests >=1.0.0",)}
@@ -421,7 +421,7 @@ class TestUnconditionalDependencyIsDedupedFromExtras:
             )
         )
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.depends == ("python >=3.0",)
         assert result.extra_depends == {
@@ -441,7 +441,7 @@ class TestMixedMarkerAndExtraClause:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=('packagea; python_version < "3.9" and extra != "cli"',))
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.depends == ('packagea[when="python<3.9.0a0"]', "python >=3.0")
         assert result.extra_depends == {"cli": ()}
@@ -459,13 +459,13 @@ class TestWholeRecordRejection:
         metadata = _metadata(requires_dist=('requests>=2.0.0; platform_machine == "x86_64"',))
 
         with pytest.raises(NeedsArchSplitError):
-            _dependencies(config, metadata, (aggregator_mapper,), subdir=None)
+            _dependencies(config, metadata, (passthrough_mapper,), subdir=None)
 
     def test_arch_specific_subdir_resolves_the_same_marker(self) -> None:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=('requests>=2.0.0; platform_machine == "x86_64"',))
 
-        result = _dependencies(config, metadata, (aggregator_mapper,), subdir=CondaSubdir.LINUX_64)
+        result = _dependencies(config, metadata, (passthrough_mapper,), subdir=CondaSubdir.LINUX_64)
 
         assert result.depends == ("requests >=2.0.0", "python >=3.0")
 
@@ -474,7 +474,7 @@ class TestWholeRecordRejection:
         metadata = _metadata(requires_dist=('requests>=2.0.0; platform_release == "5.0"',))
 
         with pytest.raises(UnconvertableMarkerError):
-            _dependencies(config, metadata, (aggregator_mapper,))
+            _dependencies(config, metadata, (passthrough_mapper,))
 
     def test_marker_combining_extra_clauses_still_raises(self) -> None:
         """A marker mixing more than one `extra ==` clause with something
@@ -485,7 +485,7 @@ class TestWholeRecordRejection:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=('requests>=2.0.0; extra == "foo" or extra == "bar"',))
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.depends == ("python >=3.0",)
         assert result.extra_depends == {
@@ -506,7 +506,7 @@ class TestRepeatedDependencyNames:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=("requests>=1.2", "requests<3.0"))
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.depends == ("requests >=1.2", "requests <3.0a0", "python >=3.0")
 
@@ -551,7 +551,7 @@ class TestProvidesExtraIgnored:
             provides_extra=("standard",),
         )
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.extra_depends == {}
 
@@ -564,7 +564,7 @@ class TestProvidesExtraIgnored:
             provides_extra=(),
         )
 
-        result = _dependencies(config, metadata, (aggregator_mapper,))
+        result = _dependencies(config, metadata, (passthrough_mapper,))
 
         assert result.extra_depends == {"standard": ("httpx >=0.23.0",)}
 

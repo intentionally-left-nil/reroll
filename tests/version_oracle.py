@@ -17,10 +17,10 @@ from rattler import VersionSpec
 
 from reroll.dependencies.pep508_to_matchspec import pep508_to_matchspec
 from reroll.dependencies.version_format import format_version
-from reroll.name_mapping import aggregator_mapper
+from reroll.name_mapping import passthrough_mapper
 
 _PACKAGE_NAME = "pkg"
-"""An arbitrary name `aggregator_mapper` passes through unchanged, so
+"""An arbitrary name `passthrough_mapper` passes through unchanged, so
 `matchspec_version` can strip it back off to get the bare version clause.
 """
 
@@ -32,7 +32,7 @@ def matchspec_version(specifier: str, *, allow_pre: bool = False) -> str:
     real dependency's version goes through.
     """
     matchspec = pep508_to_matchspec(
-        f"{_PACKAGE_NAME}{specifier}", (aggregator_mapper,), allow_pre=allow_pre
+        f"{_PACKAGE_NAME}{specifier}", (passthrough_mapper,), allow_pre=allow_pre
     )
     return matchspec.removeprefix(f"{_PACKAGE_NAME} ")
 

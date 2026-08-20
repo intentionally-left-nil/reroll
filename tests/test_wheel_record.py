@@ -12,12 +12,12 @@ from reroll.errors import (
     UnconvertableRequirementError,
     UnsupportedPrereleaseError,
 )
-from reroll.name_mapping import NameMappers, aggregator_mapper, static_mapper
+from reroll.name_mapping import NameMappers, passthrough_mapper, static_mapper
 from reroll.subdir import CondaSubdir
 from reroll.wheel_metadata import WheelMetadata
 from reroll.wheel_record import WheelRecord, get_wheel_records
 
-_MAPPERS: NameMappers = (aggregator_mapper,)
+_MAPPERS: NameMappers = (passthrough_mapper,)
 
 
 def _metadata(

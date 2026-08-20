@@ -10,7 +10,7 @@ import pytest
 import reroll.wheel_record as wheel_record_module
 from reroll import reroll
 from reroll.errors import InvalidWheelArchiveError
-from reroll.name_mapping import aggregator_mapper, static_mapper
+from reroll.name_mapping import passthrough_mapper, static_mapper
 
 
 def _make_wheel(
@@ -38,7 +38,7 @@ class TestRerollEndToEnd:
     def test_converts_a_wheel_file_into_its_repodata_record(self, tmp_path: Path) -> None:
         wheel = _make_wheel(tmp_path, requires_dist=("requests>=2.20",))
 
-        (record,) = reroll(wheel, mappers=(aggregator_mapper,))
+        (record,) = reroll(wheel, mappers=(passthrough_mapper,))
 
         assert record.name == "tinylib"
         assert record.version == "1.2.3"
@@ -52,7 +52,7 @@ class TestRerollEndToEnd:
     def test_accepts_a_str_path(self, tmp_path: Path) -> None:
         wheel = _make_wheel(tmp_path)
 
-        (record,) = reroll(str(wheel), mappers=(aggregator_mapper,))
+        (record,) = reroll(str(wheel), mappers=(passthrough_mapper,))
 
         assert record.name == "tinylib"
 
@@ -61,14 +61,14 @@ class TestRerollEndToEnd:
         nested.mkdir(parents=True)
         wheel = _make_wheel(nested)
 
-        (record,) = reroll(wheel, mappers=(aggregator_mapper,))
+        (record,) = reroll(wheel, mappers=(passthrough_mapper,))
 
         assert record.fn == "tinylib-1.2.3-py3-none-any.whl"
 
     def test_multiple_wheel_configs_produce_multiple_records(self, tmp_path: Path) -> None:
         wheel = _make_wheel(tmp_path, filename="tinylib-1.2.3-cp39-abi3-manylinux_2_17_x86_64.whl")
 
-        records = reroll(wheel, mappers=(aggregator_mapper,), abi3_upper_bound="3.10")
+        records = reroll(wheel, mappers=(passthrough_mapper,), abi3_upper_bound="3.10")
 
         assert {record.build for record in records} == {
             "cp39_cp39_manylinux_2_17_x86_64_0",
@@ -80,14 +80,14 @@ class TestRerollEndToEnd:
             tmp_path, filename="tinylib-1.2.3rc1-py3-none-any.whl", version="1.2.3rc1"
         )
 
-        (record,) = reroll(wheel, mappers=(aggregator_mapper,), allow_pre=True)
+        (record,) = reroll(wheel, mappers=(passthrough_mapper,), allow_pre=True)
 
         assert record.version == "1.2.3.rc1"
 
     def test_sha256_size_url_default_to_none(self, tmp_path: Path) -> None:
         wheel = _make_wheel(tmp_path)
 
-        (record,) = reroll(wheel, mappers=(aggregator_mapper,))
+        (record,) = reroll(wheel, mappers=(passthrough_mapper,))
 
         assert record.sha256 is None
         assert record.size is None
@@ -98,7 +98,7 @@ class TestRerollEndToEnd:
 
         (record,) = reroll(
             wheel,
-            mappers=(aggregator_mapper,),
+            mappers=(passthrough_mapper,),
             sha256="abc123",
             size=42,
             url="https://example.org/tinylib-1.2.3-py3-none-any.whl",
@@ -114,7 +114,7 @@ class TestRerollEndToEnd:
             archive.writestr("tinylib-1.2.3.dist-info/WHEEL", "Wheel-Version: 1.0\n\n")
 
         with pytest.raises(InvalidWheelArchiveError):
-            reroll(path, mappers=(aggregator_mapper,))
+            reroll(path, mappers=(passthrough_mapper,))
 
 
 class TestRerollMappers:
@@ -126,7 +126,7 @@ class TestRerollMappers:
         (`reroll.wheel_record`), which is where the fallback to
         `default_mappers()` actually lives.
         """
-        monkeypatch.setattr(wheel_record_module, "default_mappers", lambda: (aggregator_mapper,))
+        monkeypatch.setattr(wheel_record_module, "default_mappers", lambda: (passthrough_mapper,))
         wheel = _make_wheel(tmp_path)
 
         (record,) = reroll(wheel)
@@ -141,7 +141,7 @@ class TestRerollMappers:
         def _unused_default_mappers() -> tuple[object, ...]:
             nonlocal calls
             calls += 1
-            return (aggregator_mapper,)
+            return (passthrough_mapper,)
 
         monkeypatch.setattr(wheel_record_module, "default_mappers", _unused_default_mappers)
         wheel = _make_wheel(tmp_path)

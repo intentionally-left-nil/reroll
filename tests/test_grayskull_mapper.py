@@ -14,6 +14,7 @@ from reroll.name_mapping import (
     CandidateSource,
     aggregator_mapper,
     map_name,
+    passthrough_mapper,
 )
 
 _FIXTURE_YAML = """\
@@ -208,7 +209,7 @@ class TestGrayskullMapperEndToEnd:
     ) -> None:
         mapper = grayskull_mapper(fixture_config)
 
-        result = map_name("requests", (mapper, aggregator_mapper))
+        result = map_name("requests", (mapper, aggregator_mapper, passthrough_mapper))
 
         assert result == "requests"
 

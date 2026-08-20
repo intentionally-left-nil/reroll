@@ -22,7 +22,7 @@ from reroll.errors import (
     UnconvertableRequirementError,
 )
 from reroll.filename import Arch, WheelConfig
-from reroll.name_mapping import aggregator_mapper
+from reroll.name_mapping import passthrough_mapper
 from reroll.subdir import CondaSubdir
 from reroll.wheel_metadata import WheelMetadata
 
@@ -625,17 +625,17 @@ class TestWheelDependenciesNoarch:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=("requests>=2.0.0",))
 
-        result = wheel_dependencies(config, metadata, (aggregator_mapper,))
+        result = wheel_dependencies(config, metadata, (passthrough_mapper,))
 
         assert result == {
-            None: calculate_dependencies(config, metadata, (aggregator_mapper,), subdir=None)
+            None: calculate_dependencies(config, metadata, (passthrough_mapper,), subdir=None)
         }
 
     def test_allow_pre_is_passed_through(self) -> None:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=("requests==1.0.0rc1",))
 
-        result = wheel_dependencies(config, metadata, (aggregator_mapper,), allow_pre=True)
+        result = wheel_dependencies(config, metadata, (passthrough_mapper,), allow_pre=True)
 
         assert result[None].depends == ("requests ==1.0.0.rc1", "python >=3.0")
 
@@ -644,7 +644,7 @@ class TestWheelDependenciesNoarch:
         metadata = _metadata(requires_python=">=3.10")
 
         with pytest.raises(PythonRangeMismatchError):
-            wheel_dependencies(config, metadata, (aggregator_mapper,))
+            wheel_dependencies(config, metadata, (passthrough_mapper,))
 
 
 class TestWheelDependenciesArchSplit:
@@ -652,19 +652,19 @@ class TestWheelDependenciesArchSplit:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=('requests>=2.0.0; platform_machine == "x86_64"',))
 
-        result = wheel_dependencies(config, metadata, (aggregator_mapper,))
+        result = wheel_dependencies(config, metadata, (passthrough_mapper,))
 
         assert set(result) == set(CondaSubdir)
         for subdir in CondaSubdir:
             assert result[subdir] == calculate_dependencies(
-                config, metadata, (aggregator_mapper,), subdir=subdir
+                config, metadata, (passthrough_mapper,), subdir=subdir
             )
 
     def test_linux_64_resolves_the_matching_arch_marker(self) -> None:
         config = _config(interpreter="py3", abi="none")
         metadata = _metadata(requires_dist=('requests>=2.0.0; platform_machine == "x86_64"',))
 
-        result = wheel_dependencies(config, metadata, (aggregator_mapper,))
+        result = wheel_dependencies(config, metadata, (passthrough_mapper,))
 
         assert result[CondaSubdir.LINUX_64].depends == ("requests >=2.0.0", "python >=3.0")
         assert result[CondaSubdir.LINUX_AARCH64].depends == ("python >=3.0",)
@@ -677,11 +677,11 @@ class TestWheelDependenciesPlatformSpecific:
         )
         metadata = _metadata(requires_dist=("requests>=2.0.0",))
 
-        result = wheel_dependencies(config, metadata, (aggregator_mapper,))
+        result = wheel_dependencies(config, metadata, (passthrough_mapper,))
 
         assert result == {
             CondaSubdir.LINUX_64: calculate_dependencies(
-                config, metadata, (aggregator_mapper,), subdir=CondaSubdir.LINUX_64
+                config, metadata, (passthrough_mapper,), subdir=CondaSubdir.LINUX_64
             )
         }
 
@@ -691,12 +691,12 @@ class TestWheelDependenciesPlatformSpecific:
         )
         metadata = _metadata(requires_dist=("requests>=2.0.0",))
 
-        result = wheel_dependencies(config, metadata, (aggregator_mapper,))
+        result = wheel_dependencies(config, metadata, (passthrough_mapper,))
 
         assert set(result) == {CondaSubdir.OSX_64, CondaSubdir.OSX_ARM64}
         for subdir in result:
             assert result[subdir] == calculate_dependencies(
-                config, metadata, (aggregator_mapper,), subdir=subdir
+                config, metadata, (passthrough_mapper,), subdir=subdir
             )
 
     def test_allow_pre_is_passed_through(self) -> None:
@@ -705,7 +705,7 @@ class TestWheelDependenciesPlatformSpecific:
         )
         metadata = _metadata(requires_dist=("requests==1.0.0rc1",))
 
-        result = wheel_dependencies(config, metadata, (aggregator_mapper,), allow_pre=True)
+        result = wheel_dependencies(config, metadata, (passthrough_mapper,), allow_pre=True)
 
         assert result[CondaSubdir.LINUX_64].depends == (
             "requests ==1.0.0.rc1",

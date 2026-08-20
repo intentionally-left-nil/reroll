@@ -8,6 +8,7 @@ step of that pipeline (`extract_metadata_file`, `parse_metadata`,
 
 from __future__ import annotations
 
+from importlib.metadata import version
 from pathlib import Path
 
 from reroll.default_mappers import default_mappers
@@ -27,6 +28,7 @@ from reroll.name_mapping import (
     NameMappers,
     aggregator_mapper,
     map_name,
+    passthrough_mapper,
     static_mapper,
 )
 from reroll.stages import extract_metadata_file, get_wheel_records, parse_metadata
@@ -46,13 +48,17 @@ __all__ = [
     "UnresolvedCondaNameError",
     "WheelMetadata",
     "WheelRecord",
+    "__version__",
     "aggregator_mapper",
     "default_mappers",
     "map_name",
+    "passthrough_mapper",
     "to_matchspec",
     "reroll",
     "static_mapper",
 ]
+
+__version__ = version("py-reroll")
 
 
 def reroll(
@@ -72,7 +78,9 @@ def reroll(
 
     `mappers` defaults to `default_mappers()` -- the chain of grayskull,
     conda-lock, the hand-maintained overrides table, and parselmouth
-    mappers, aggregated by `aggregator_mapper` -- when not given explicitly.
+    mappers, aggregated by `aggregator_mapper` and falling back to the
+    normalized PyPI name via `passthrough_mapper` -- when not given
+    explicitly.
 
     `sha256`, `size`, and `url` are never computed from `path` -- each is
     set on every returned record only if passed in here (docs/wheel_record.md).
